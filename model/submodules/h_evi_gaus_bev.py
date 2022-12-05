@@ -52,7 +52,7 @@ class EviGausBEV(BEVBase):
         return evidence, obs_mask
 
     def loss(self, batch_dict):
-        tgt_pts, tgt_labels = self.get_tgt(batch_dict)
+        tgt_pts, tgt_labels, indices = self.get_tgt(batch_dict)
         evidence = draw_sample_prob(self.centers[:, :3],
                                     self.out['reg'].relu(),
                                     tgt_pts, self.res, self.distr_r, self.det_r,

@@ -18,7 +18,8 @@ class HBEVBase(nn.Module):
         self.heads = []
         for cfg in cfgs['heads']:
             k = list(cfg.keys())[0]
-            setattr(self, k, self.DISTR_CLS(cfg[k].update(cfgs['args'])))
+            cfg[k].update(cfgs['args'])
+            setattr(self, k, self.DISTR_CLS(cfg[k]))
             self.heads.append(k)
 
         self.convs = []
@@ -48,7 +49,7 @@ class HBEVBase(nn.Module):
             coor = fuse_batch_indices(stensor3d.C, batch_dict['num_cav'])
             # todo: barely fuse voxels with batch indices might cause overlapped voxels even it has
             #  a low chance, we temporarily average them.
-            coor, indices = coor.unique(dim=0, return_inverse=True)
+            coor, indices = coor[:, :3].unique(dim=0, return_inverse=True)
             feat = torch_scatter.scatter_mean(stensor3d.F, indices, dim=0)
             obs_mask = self.get_obs_mask(coor, stride)
 
@@ -57,7 +58,7 @@ class HBEVBase(nn.Module):
                 features=feat,
                 tensor_stride=[stride] * 2
             )
-            stensor2d = getattr(self, k)(stensor2d)
+            stensor2d = getattr(self, f'convs_{k}')(stensor2d)
             # after coordinate expansion, some coordinates will exceed the maximum detection
             # range, therefore they are removed here.
 
@@ -84,7 +85,7 @@ class HBEVBase(nn.Module):
         offset = meshgrid(-self.distr_r, self.distr_r, 2,
                           n_steps=steps).to(coor.device).view(-1, 2)
         nbrs = offset[torch.norm(offset, dim=1) < 2].view(1, -1, 2)
-        voxel_new = coor[:, 1:3].view(-1, 1, 2) + nbrs
+        voxel_new = coor[:, 1:3].view(-1, 1, 2) / stride + nbrs
         xy = (torch.floor(voxel_new / res) + size).view(-1, 2)
         mask = torch.logical_and(xy >= 0, xy < (size * 2)).all(dim=1)
         xy = xy[mask].long().T
@@ -121,17 +122,8 @@ class BEVBase(nn.Module):
         self.x_max = (r - 1) // self.stride * self.stride        # relevant to ME
         self.x_min = - (self.x_max + self.stride)                # relevant to ME
 
-        feat_dim = self.in_dim
-        if hasattr(self, 'conv_kernels'):
-            self.get_conv_layer()
-            feat_dim = 32
-
+        feat_dim = 32
         self.distr_reg = self.get_reg_layer(feat_dim)
-
-        steps = int(self.distr_r / self.res) * 2 + 1
-        offset = meshgrid(-self.distr_r, self.distr_r, 2,
-                          n_steps=steps).cuda().view(-1, 2)
-        self.nbrs = offset[torch.norm(offset, dim=1) < 2].view(1, -1, 2)
 
         self.centers = None
         self.feat = None
@@ -167,7 +159,7 @@ class BEVBase(nn.Module):
                 'evidence': evidence,
                 'obs_mask': conv_out['obs_mask'],
                 'centers': self.centers,
-                'reg': self.out['reg']
+                'reg': reg
             }
 
     def down_sample(self, coor, feat):
@@ -245,21 +237,20 @@ class BEVBase(nn.Module):
             indices = indices.unique(dim=0)
             tgt_pts = indices.clone()
             tgt_pts[:, 1:] = (tgt_pts[:, 1:] - self.size) * self.res
-        mask = obs_mask[indices[0], indices[1], indices[2]]
-
+        mask = obs_mask[indices[:, 0], indices[:, 1], indices[:, 2]]
         return tgt_pts[mask], indices[mask]
 
     @torch.no_grad()
     def downsample_tgt_pts(self, tgt_label, max_sam):
-        selected = torch.zeros_like(tgt_label)
-        pos = tgt_label.clone()
-        if pos > max_sam:
-            mask = torch.rand_like(tgt_label[pos]) > max_sam / pos.sum()
+        selected = torch.ones_like(tgt_label.bool())
+        pos = tgt_label == 1
+        if pos.sum() > max_sam:
+            mask = torch.rand_like(tgt_label[pos].float()) < max_sam / pos.sum()
             selected[pos] = mask
 
-        neg = torch.logical_not(tgt_label)
-        if neg.sum() < max_sam:
-            mask = torch.rand_like(tgt_label[neg]) < max_sam / neg.sum()
+        neg = tgt_label == 0
+        if neg.sum() > max_sam:
+            mask = torch.rand_like(tgt_label[neg].float()) < max_sam / neg.sum()
             selected[neg] = mask
         return selected
 
@@ -271,8 +262,8 @@ class BEVBase(nn.Module):
         if self.name == 'surface':
             ixy = metric2indices(tgt_pts, 0.2).long().T
             gt_bev = batch_dict['bevmap_static']  # gt has res=0.2
-            ixy[1:] += gt_bev.shape[1] / 2
-            tgt_label = gt_bev[ixy[0], ixy[1], ixy[2]].bool()
+            ixy[1:] += int(gt_bev.shape[1] / 2)
+            tgt_label = gt_bev[ixy[0], ixy[1], ixy[2]].bool().int()
         else:  # object
             boxes = batch_dict['target_boxes'].clone()
             boxes[:, 3] = 0
@@ -280,9 +271,26 @@ class BEVBase(nn.Module):
             _, box_idx_of_pts = points_in_boxes_gpu(
                 pts, boxes, batch_size=batch_dict['batch_size']
             )
-            tgt_label = box_idx_of_pts >= 0
+            boxes[:, 4:6] *= 4
+            _, box_idx_of_pts2 = points_in_boxes_gpu(
+                pts, boxes, batch_size=batch_dict['batch_size']
+            )
+            tgt_label = - (box_idx_of_pts2 >=0).int()
+            tgt_label[box_idx_of_pts >= 0] = 1
 
-        mask = self.downsample_tgt_pts(tgt_label, max_sam=3000 * batch_dict['batch_size'])
+        n_sam = 3000 if self.name=='surface' else len(batch_dict['target_boxes']) * 50
+        mask = self.downsample_tgt_pts(tgt_label, max_sam=n_sam)
+        #
+        # if self.name == 'object':
+        #     from utils.vislib import draw_points_boxes_plt
+        #     pts = tgt_pts[mask] # [tgt_label[mask]]
+        #     draw_points_boxes_plt(
+        #         pc_range=50,
+        #         points=pts[pts[:, 0] == 0, 1:].cpu().numpy(),
+        #         boxes_gt=batch_dict['target_boxes'][batch_dict['target_boxes'][:, 0] == 0, 1:]
+        #     )
+        #     raise NotImplementedError
+        tgt_label = tgt_label.bool()
         return tgt_pts[mask], tgt_label[mask], indices[mask]
 
 
