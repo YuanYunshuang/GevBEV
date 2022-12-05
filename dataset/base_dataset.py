@@ -102,7 +102,7 @@ class BaseDataset(Dataset):
             'features': features[mask],
             'target_semantic': labels[mask],
             'target_boxes': data_dict['boxes'],
-            'target_bev_pts': data_dict.get('bev_pts', None),
+            'target_bev_pts': data_dict.get('pts', None),
             'target_bev_pts_idx': data_dict.get('bev_pts_idx', None),
             'bevmap_static': data_dict.get('bevmap_static', None),
             'bevmap_dynamic': data_dict.get('bevmap_dynamic', None),
@@ -164,7 +164,7 @@ class BaseDataset(Dataset):
         bev_points = np.concatenate(bev_points, axis=0)
         bev_points_idx = np.concatenate(bev_points_idx, axis=0)
         data_dict.update({
-            'bev_pts': bev_points,
+            'pts': bev_points,
             'bev_pts_idx': bev_points_idx,
         })
         return data_dict
@@ -186,12 +186,12 @@ class BaseDataset(Dataset):
         Augment dataset by random rotation, scaling and noising
         :param data_dict: a dict contains:
                          - 'lidar': np.ndarray [N1, 3+c], columns 1-3 are x, y, z
-                         - 'bev_pts': np.ndarray [N2, 2], columns 1-2 are x, y
+                         - 'pts': np.ndarray [N2, 2], columns 1-2 are x, y
                          - 'boxes': np.ndarray [N3, 7+c], columns 1-7 are x, y, z, dx, dy, dz, r
         :return: the same dict with augmented data
         """
         lidars = data_dict['lidar']
-        bev_pts = data_dict['bev_pts']
+        bev_pts = data_dict['pts']
         boxes = data_dict['boxes']
         rot = 2 * np.pi * np.random.random()
 
@@ -226,7 +226,7 @@ class BaseDataset(Dataset):
 
         data_dict.update({
             'lidar': lidars,
-            'bev_pts': bev_pts,
+            'pts': bev_pts,
             'boxes': boxes
         })
 
@@ -267,15 +267,15 @@ class BaseDataset(Dataset):
             for s in self.cfgs['crop'].keys():
                 if s == 'z':
                     continue
-                mask = self.get_crop_mask(data_dict['bev_pts'], s)
-                data_dict['bev_pts'] = data_dict['bev_pts'][mask]
+                mask = self.get_crop_mask(data_dict['pts'], s)
+                data_dict['pts'] = data_dict['pts'][mask]
                 data_dict['bev_pts_idx'] = data_dict['bev_pts_idx'][mask]
             # after augmentation, in some cavs lidar points are all removed by cropping,
             # make sure the bev pts for these cavs are also removed
             rm_idx = set(np.unique(data_dict['bev_pts_idx'])) - set(np.unique(lidar_idx))
             for i in rm_idx:
                 mask = data_dict['bev_pts_idx'] == i
-                data_dict['bev_pts'] = data_dict['bev_pts'][mask]
+                data_dict['pts'] = data_dict['pts'][mask]
                 data_dict['bev_pts_idx'] = data_dict['bev_pts_idx'][mask]
         return data_dict
 

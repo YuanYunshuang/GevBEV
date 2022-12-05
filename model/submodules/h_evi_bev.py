@@ -5,31 +5,8 @@ from torch import nn
 from model.submodules.utils import minkconv_conv_block, indices2metric, \
     pad_r, linear_last, fuse_batch_indices, meshgrid, metric2indices, \
     weighted_mahalanobis_dists
-from model.submodules.bev_base import BEVBase
+from model.submodules.bev_base import BEVBase, HBEVBase
 from model.losses.edl import edl_mse_loss
-
-
-class HEviBev(nn.Module):
-    def __init__(self, cfgs):
-        super(HEviBev, self).__init__()
-        self.heads = []
-        for cfg in cfgs:
-            k = list(cfg.keys())[0]
-            setattr(self, k, EviBEV(cfg[k]))
-            self.heads.append(k)
-
-    def forward(self, batch_dict):
-        for h in self.heads:
-            getattr(self, h)(batch_dict)
-
-    def loss(self, batch_dict):
-        loss = 0
-        loss_dict = {}
-        for h in self.heads:
-            l, ldict = getattr(self, h).loss(batch_dict)
-            loss = loss + l
-            loss_dict.update(ldict)
-        return loss, loss_dict
 
 
 class EviBEV(BEVBase):
@@ -54,16 +31,23 @@ class EviBEV(BEVBase):
         return evidence
 
     def loss(self, batch_dict):
-        tgt, indices, _ = self.get_tgt(batch_dict)
-        evidence = self.out['evidence'][
+        tgt_pts, tgt_label, indices = self.get_tgt(batch_dict, discrete=True)
+        evidence_map = self.draw_distribution(self.out['reg'])
+        evidence = evidence_map[
             indices[0], indices[1], indices[2]
         ]
         epoch_num = batch_dict.get('epoch', 0)
-        loss, loss_dict = edl_mse_loss(self.name[:3], evidence, tgt,
+        loss, loss_dict = edl_mse_loss(self.name[:3], evidence, tgt_label,
                                        epoch_num, 2, self.annealing_step)
         # we boost var with a small weighted loss to encourage larger vars
         # if epoch_num > 40:
         #     loss_boost = torch.exp(-self.out['reg'].relu()).mean()
         #     loss = loss + loss_boost * 0.01
         return loss, loss_dict
+
+
+class HEviBev(HBEVBase):
+    DISTR_CLS = EviBEV
+    def __init__(self, cfgs):
+        super(HEviBev, self).__init__(cfgs)
 

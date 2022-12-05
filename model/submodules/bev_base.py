@@ -9,6 +9,103 @@ from ops.utils import points_in_boxes_gpu
 from model.losses.common import cross_entroy_with_logits
 
 
+class HBEVBase(nn.Module):
+    DISTR_CLS = None
+    def __init__(self, cfgs):
+        super(HBEVBase, self).__init__()
+        for k, v in cfgs['args'].items():
+            setattr(self, k, v)
+        self.heads = []
+        for cfg in cfgs['heads']:
+            k = list(cfg.keys())[0]
+            setattr(self, k, self.DISTR_CLS(cfg[k].update(cfgs['args'])))
+            self.heads.append(k)
+
+        self.convs = []
+        for k, conv_args in cfgs['convs'].items():
+            self.convs.append(k)
+            setattr(self, f'convs_{k}', self.get_conv_layer(conv_args))
+            stride = int(k[1])
+            r = int(self.det_r / self.voxel_size)
+            setattr(self, f'x_max_{k}', (r - 1) // stride * stride)  # relevant to ME
+            setattr(self, f'x_min_{k}', - (r - 1) // stride * stride - stride)
+
+    def get_conv_layer(self, args):
+        minkconv_layer = functools.partial(
+            minkconv_conv_block, d=2, bn_momentum=0.1,
+        )
+        layers = [minkconv_layer(args['in_dim'], 32, args['kernels'][0], 1)]
+        for ks in args['kernels'][1:]:
+            layers.append(minkconv_layer(32, 32, ks, 1,
+                                         expand_coordinates=args['expand_coordinates']))
+        return nn.Sequential(*layers)
+
+    def forward(self, batch_dict):
+        batch_dict['distr_conv_out'] = {}
+        for k in self.convs:
+            stride = int(k[1])
+            stensor3d = batch_dict['compression'][k]
+            coor = fuse_batch_indices(stensor3d.C, batch_dict['num_cav'])
+            # todo: barely fuse voxels with batch indices might cause overlapped voxels even it has
+            #  a low chance, we temporarily average them.
+            coor, indices = coor.unique(dim=0, return_inverse=True)
+            feat = torch_scatter.scatter_mean(stensor3d.F, indices, dim=0)
+            obs_mask = self.get_obs_mask(coor, stride)
+
+            stensor2d = ME.SparseTensor(
+                coordinates=coor.contiguous(),
+                features=feat,
+                tensor_stride=[stride] * 2
+            )
+            stensor2d = getattr(self, k)(stensor2d)
+            # after coordinate expansion, some coordinates will exceed the maximum detection
+            # range, therefore they are removed here.
+
+            mask = torch.logical_and(
+                stensor2d.C[:, 1:] >= getattr(self, f'x_min_{k}'),
+                stensor2d.C[:, 1:] <= getattr(self, f'x_max_{k}'),
+            ).all(dim=-1)
+            # mask = (stensor2d.C[:, 1:].abs() < (self.det_r / self.voxel_size)).all(dim=-1)
+            coor = stensor2d.C[mask]
+            feat = stensor2d.F[mask]
+            batch_dict['distr_conv_out'][k] = {
+                'coor': coor,
+                'feat': feat,
+                'obs_mask': obs_mask
+            }
+
+        for h in self.heads:
+            getattr(self, h)(batch_dict)
+
+    def get_obs_mask(self, coor, stride):
+        res = stride * self.voxel_size
+        size = int(self.det_r / res)
+        steps = int(self.distr_r / res) * 2 + 1
+        offset = meshgrid(-self.distr_r, self.distr_r, 2,
+                          n_steps=steps).to(coor.device).view(-1, 2)
+        nbrs = offset[torch.norm(offset, dim=1) < 2].view(1, -1, 2)
+        voxel_new = coor[:, 1:3].view(-1, 1, 2) + nbrs
+        xy = (torch.floor(voxel_new / res) + size).view(-1, 2)
+        mask = torch.logical_and(xy >= 0, xy < (size * 2)).all(dim=1)
+        xy = xy[mask].long().T
+        batch_indices = torch.tile(coor[:, 0].view(-1, 1), (1, nbrs.shape[1])).view(-1)
+        batch_indices = batch_indices[mask].long()
+        batch_size = coor[:, 0].max().int() + 1
+        obs_mask = torch.zeros((batch_size, size * 2, size * 2),
+                               device=coor.device)
+        obs_mask[batch_indices, xy[0], xy[1]] = 1
+        return obs_mask.bool()
+
+    def loss(self, batch_dict):
+        loss = 0
+        loss_dict = {}
+        for h in self.heads:
+            l, ldict = getattr(self, h).loss(batch_dict)
+            loss = loss + l
+            loss_dict.update(ldict)
+        return loss, loss_dict
+
+
 class BEVBase(nn.Module):
     def __init__(self, cfgs):
         super(BEVBase, self).__init__()
@@ -50,32 +147,12 @@ class BEVBase(nn.Module):
         raise NotImplementedError
 
     def forward(self, batch_dict):
-        stensor3d = batch_dict['compression'][f'p{self.stride}']
-        coor = fuse_batch_indices(stensor3d.C, batch_dict['num_cav'])
-        obs_mask = self.get_obs_mask(coor)
-        coor, feat = self.get_distr_samples(coor[:, :3], stensor3d.F, batch_dict)
+        conv_out = batch_dict['distr_conv_out'][f'p{self.stride}']
+        coor = conv_out['coor']
+        feat = conv_out['feat']
+        if self.training:
+            coor, feat = self.down_sample(coor, feat)
 
-        if hasattr(self, 'convs'):
-            stensor2d = ME.SparseTensor(
-                coordinates=coor.contiguous(),
-                features=feat,
-                tensor_stride=[self.stride] * 2
-            )
-            stensor2d = self.convs(stensor2d)
-            # after coordinate expansion, some coordinates will exceed the maximum detection
-            # range, therefore they are removed here.
-            mask = torch.logical_and(
-                stensor2d.C[:, 1:] >= self.x_min,
-                stensor2d.C[:, 1:] <= self.x_max,
-            ).all(dim=-1)
-            # mask = (stensor2d.C[:, 1:].abs() < (self.det_r / self.voxel_size)).all(dim=-1)
-            coor = stensor2d.C[mask]
-            feat = stensor2d.F[mask]
-
-        # todo: barely fuse voxels with batch indices might cause overlapped voxels even it has
-        #  a low chance, we temporarily average them.
-        coor, indices = coor.unique(dim=0, return_inverse=True)
-        feat = torch_scatter.scatter_mean(feat, indices, dim=0)
         self.centers = indices2metric(coor, self.voxel_size)
         self.feat = feat
         reg = self.distr_reg(feat)
@@ -84,43 +161,21 @@ class BEVBase(nn.Module):
             'reg': reg,
         }
 
-        evidence = self.draw_distribution(reg)
+        if not self.training:
+            evidence = self.draw_distribution(reg)
+            batch_dict[f'distr_{self.name}'] = {
+                'evidence': evidence,
+                'obs_mask': conv_out['obs_mask'],
+                'centers': self.centers,
+                'reg': self.out['reg']
+            }
 
-        batch_dict[f'distr_{self.name}'] = {
-            'evidence': evidence,
-            'obs_mask': obs_mask,
-            'centers': self.centers,
-            'reg': self.out['reg']
-        }
+    def down_sample(self, coor, feat):
+        keep = torch.rand_like(feat[:, 0]) > 0.5
+        coor = coor[keep]
+        feat = feat[keep]
 
-    def get_obs_mask(self, coor):
-        voxel_new = coor[:, 1:3].view(-1, 1, 2) + self.nbrs
-        size = self.size
-        xy = (torch.floor(voxel_new / self.res) + size).view(-1, 2)
-        mask = torch.logical_and(xy >= 0, xy < (size * 2)).all(dim=1)
-        xy = xy[mask].long().T
-        batch_indices = torch.tile(coor[:, 0].view(-1, 1), (1, self.nbrs.shape[1])).view(-1)
-        batch_indices = batch_indices[mask].long()
-        batch_size = coor[:, 0].max().int() + 1
-        obs_mask = torch.zeros((batch_size, size * 2, size * 2),
-                               device=coor.device)
-        obs_mask[batch_indices, xy[0], xy[1]] = 1
-        return obs_mask.bool()
-
-    def get_distr_samples(self, coor_in, feat_in, batch_dict):
-        if self.sample_pixels:
-            sampling_fn = getattr(self, f'sample_with_{self.sampling}')
-            coor_out, feat_out = sampling_fn(coor_in, feat_in, batch_dict)
-        else:
-            coor_out = coor_in[:, :3]
-            feat_out = feat_in
-
-        if self.training:
-            keep = torch.rand_like(feat_out[:, 0]) > 0.5
-            coor_out = coor_out[keep]
-            feat_out = feat_out[keep]
-
-        return coor_out, feat_out
+        return coor, feat
 
     def sample_with_boxes(self, coor_in, feat_in, batch_dict):
         coor_metric = indices2metric(coor_in, self.voxel_size)
@@ -173,41 +228,61 @@ class BEVBase(nn.Module):
         return bev_pts[:, :3]
 
     @torch.no_grad()
-    def bev_pts_to_indices(self, bev_pts):
-        ixy = metric2indices(bev_pts[:, :3], self.res).long()
+    def pts_to_masked_indices(self, pts):
+        ixy = metric2indices(pts[:, :3], self.res).long()
         ixy[:, 1:] += self.size
         mask = torch.logical_and(ixy[:, 1:] >= 0, ixy[:, 1:] < self.size * 2).all(dim=-1)
         indices = ixy[mask]
         return indices, mask
 
     @torch.no_grad()
-    def get_tgt(self, batch_dict):
-        if self.sample_pixels:
-            bev_pts = self.get_bev_pts_with_boxes(batch_dict)
-            tgt = self.get_tgt_with_boxes(
-                bev_pts,
-                batch_dict['target_boxes'],
-                batch_dict['batch_size']
-            )
-            indices, mask = self.bev_pts_to_indices(bev_pts)
-            tgt = tgt[mask]
-            bev_pts = bev_pts[mask]
-        else:
-            bev_pts = fuse_batch_indices(batch_dict['target_bev_pts'],
-                                         batch_dict['num_cav'])
-            indices, mask = self.bev_pts_to_indices(bev_pts)
-            tgt = bev_pts[mask, 3]
-            bev_pts = bev_pts[mask]
-        return tgt, indices.T, bev_pts
+    def sample_tgt_pts(self, obs_mask, discrete=False):
+        tgt_pts = self.centers.clone()
+        tgt_pts[:, 1:3] = tgt_pts[:, 1:3] + torch.randn_like(tgt_pts[:, 1:3])
+        indices, mask = self.pts_to_masked_indices(tgt_pts)
+        tgt_pts = tgt_pts[mask]
+        if discrete:
+            indices = indices.unique(dim=0)
+            tgt_pts = indices.clone()
+            tgt_pts[:, 1:] = (tgt_pts[:, 1:] - self.size) * self.res
+        mask = obs_mask[indices[0], indices[1], indices[2]]
+
+        return tgt_pts[mask], indices[mask]
 
     @torch.no_grad()
-    def get_tgt_with_boxes(self, bev_pts, target_boxes, bs):
-        boxes = target_boxes.clone()
-        boxes[:, 3] = 0
-        pts = pad_r(bev_pts)
-        _, box_idx_of_pts = points_in_boxes_gpu(
-            pts, boxes, batch_size=bs
-        )
-        pos = box_idx_of_pts >= 0
+    def downsample_tgt_pts(self, tgt_label, max_sam):
+        selected = torch.zeros_like(tgt_label)
+        pos = tgt_label.clone()
+        if pos > max_sam:
+            mask = torch.rand_like(tgt_label[pos]) > max_sam / pos.sum()
+            selected[pos] = mask
 
-        return pos
+        neg = torch.logical_not(tgt_label)
+        if neg.sum() < max_sam:
+            mask = torch.rand_like(tgt_label[neg]) < max_sam / neg.sum()
+            selected[neg] = mask
+        return selected
+
+    @torch.no_grad()
+    def get_tgt(self, batch_dict, discrete=False):
+        obs_mask = batch_dict['distr_conv_out'][f'p{self.stride}']['obs_mask']
+        tgt_pts, indices = self.sample_tgt_pts(obs_mask, discrete)
+
+        if self.name == 'surface':
+            ixy = metric2indices(tgt_pts, 0.2).long().T
+            gt_bev = batch_dict['bevmap_static']  # gt has res=0.2
+            ixy[1:] += gt_bev.shape[1] / 2
+            tgt_label = gt_bev[ixy[0], ixy[1], ixy[2]].bool()
+        else:  # object
+            boxes = batch_dict['target_boxes'].clone()
+            boxes[:, 3] = 0
+            pts = pad_r(tgt_pts)
+            _, box_idx_of_pts = points_in_boxes_gpu(
+                pts, boxes, batch_size=batch_dict['batch_size']
+            )
+            tgt_label = box_idx_of_pts >= 0
+
+        mask = self.downsample_tgt_pts(tgt_label, max_sam=3000 * batch_dict['batch_size'])
+        return tgt_pts[mask], tgt_label[mask], indices[mask]
+
+
