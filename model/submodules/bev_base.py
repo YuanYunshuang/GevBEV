@@ -49,17 +49,6 @@ class BEVBase(nn.Module):
     def loss(self, batch_dict):
         raise NotImplementedError
 
-    def get_conv_layer(self):
-        if isinstance(self.expand_coordinates, bool):
-            self.expand_coordinates = [self.expand_coordinates] * len(self.conv_kernels)
-        minkconv_layer = functools.partial(
-            minkconv_conv_block, d=2, bn_momentum=0.1,
-        )
-        layers = [minkconv_layer(self.in_dim, 32, self.conv_kernels[0], 1)]
-        for ks, expand in zip(self.conv_kernels[1:], self.expand_coordinates):
-            layers.append(minkconv_layer(32, 32, ks, 1, expand_coordinates=expand))
-        self.convs = nn.Sequential(*layers)
-
     def forward(self, batch_dict):
         stensor3d = batch_dict['compression'][f'p{self.stride}']
         coor = fuse_batch_indices(stensor3d.C, batch_dict['num_cav'])
