@@ -54,7 +54,8 @@ class DistributionPostProcess(object):
                  det_r,
                  distr_r,
                  visualization=False,
-                 vis_dir=None):
+                 vis_dir=None,
+                 edl=True):
         super(DistributionPostProcess, self).__init__()
         self.det_r = det_r
         self.distr_r = distr_r
@@ -62,10 +63,11 @@ class DistributionPostProcess(object):
         self.stride = stride
         self.vis = visualization
         self.vis_dir = vis_dir
+        self.edl = edl
 
-        self.n_sam_per_dim = 21
+        self.n_sam_per_dim = 29
         self.uni_box_samples = meshgrid(
-            -1, 1, dim=2, n_steps=self.n_sam_per_dim
+            -1.4, 1.4, dim=2, n_steps=self.n_sam_per_dim
         ).view(1, self.n_sam_per_dim, self.n_sam_per_dim, 2).cuda()
 
         self.out = {}
@@ -85,7 +87,7 @@ class DistributionPostProcess(object):
         conf, unc = self.evidence_to_conf_unc(evidence)
         
         s = batch_dict['bevmap_static'].shape[2] // grid_size
-        road_bev = batch_dict['bevmap_static'][:, ::s, ::s]
+        road_bev = batch_dict['bevmap_static'][:, ::s, ::s].bool()
         
         self.out = {
             'frame_id': batch_dict['frame_id'],
@@ -106,15 +108,16 @@ class DistributionPostProcess(object):
         pred_boxes = batch_dict['detection']['pred_boxes']
         gt_boxes = batch_dict['target_boxes']
         evidence = batch_dict['distr_object']['evidence']
+        obs_mask = batch_dict['distr_object']['obs_mask']
 
         conf, unc = self.evidence_to_conf_unc(evidence)
 
         # centers = batch_dict['distr_object']['centers']
         # reg = batch_dict['distr_object']['reg'].relu()
         # pred_sam_coor, pred_box_unc, pred_box_conf = \
-        #     self.get_sample_probs_metric(pred_boxes, centers, reg)
+        #     self.get_sample_probs_metirc(pred_boxes, centers, reg)
         # gt_sam_coor, gt_box_unc, gt_box_conf = \
-        #     self.get_sample_probs_metric(gt_boxes, centers, reg)
+        #     self.get_sample_probs_metirc(gt_boxes, centers, reg)
 
         pred_sam_coor, pred_box_unc, pred_box_conf = \
             self.get_sample_probs_pixel(pred_boxes, unc, conf)
@@ -124,6 +127,7 @@ class DistributionPostProcess(object):
         self.out.update({
             'box_bev_unc': unc,
             'box_bev_conf': conf,
+            'box_obs_mask': obs_mask,
             'pred_boxes': pred_boxes,
             'gt_boxes': gt_boxes,
             'pred_box_samples': pred_sam_coor,
@@ -151,7 +155,7 @@ class DistributionPostProcess(object):
         road_points = (road_points * res) - self.det_r + res / 2
         road_points_prob = confs_np[road_mask, 1]
 
-        valid = np.logical_and((unc < 0.7).squeeze(), obs_msk)
+        valid = np.logical_and((unc < 1.0).squeeze(), obs_msk)
         pos_road = np.logical_and(road_mask == 1, valid)
         tp_road = np.logical_and(pos_road, road_bev.astype(bool)).sum()
         fn_road = np.logical_and(np.logical_not(pos_road),
@@ -195,14 +199,15 @@ class DistributionPostProcess(object):
                    c=road_points_prob, cmap='hot', s=1, vmin=0, vmax=1)
 
         ax.plot(points[:, 0], points[:, 1], '.', markersize=0.5)
+        s = 4
         for i, (sam, conf) in enumerate(zip(pred_box_sam, pred_box_conf)):
-            ax.scatter(sam[..., 0], sam[..., 1], c=conf[..., 1],
+            ax.scatter(sam[s:-s, s:-s, 0], sam[s:-s, s:-s, 1], c=conf[s:-s, s:-s, 1],
                        cmap='cool', s=.5, vmin=0, vmax=1)
 
             # ax.contour(sam[..., 0], sam[..., 1], conf[..., 1],
             #            cmap='cool', vmin=0, vmax=1)
         for i, (sam, conf) in enumerate(zip(gt_box_sam, gt_box_conf)):
-            ax.scatter(sam[..., 0], sam[..., 1], c=conf[..., 1],
+            ax.scatter(sam[s:-s, s:-s, 0], sam[s:-s, s:-s, 1], c=conf[s:-s, s:-s, 1],
                        cmap='cool', s=.5, vmin=0, vmax=1)
             # ax.contour(sam[..., 0], sam[..., 1], conf[..., 1],
             #            cmap='cool', vmin=0, vmax=1)
@@ -223,13 +228,20 @@ class DistributionPostProcess(object):
         plt.close()
 
     def evidence_to_conf_unc(self, evidence):
-        alpha = evidence + 1
-        S = torch.sum(alpha, dim=-1, keepdim=True)
-        conf = torch.div(alpha, S)
-        K = evidence.shape[-1]
-        unc = torch.div(K, S)
-        conf = torch.sqrt(conf * (1 - unc))
-        unc = unc.squeeze(dim=-1)
+        if self.edl:
+        # used edl loss
+            alpha = evidence + 1
+            S = torch.sum(alpha, dim=-1, keepdim=True)
+            conf = torch.div(alpha, S)
+            K = evidence.shape[-1]
+            unc = torch.div(K, S)
+            conf = torch.sqrt(conf * (1 - unc))
+            unc = unc.squeeze(dim=-1)
+        else:
+            # use entropy as uncertainty
+            entropy = -evidence * torch.log2(evidence)
+            unc = entropy.sum(dim=-1)
+            conf = torch.sqrt(evidence * (1 - unc.unsqueeze(-1)))
         return conf, unc
 
     def get_sample_probs_metirc(self, boxes, ctrs, ctrs_reg):

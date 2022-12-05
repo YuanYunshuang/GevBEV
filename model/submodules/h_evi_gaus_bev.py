@@ -2,8 +2,8 @@ import functools
 import torch, torch_scatter
 import MinkowskiEngine as ME
 from torch import nn
-from model.submodules.utils import minkconv_conv_block, indices2metric, \
-    pad_r, linear_last, fuse_batch_indices, meshgrid, metric2indices, \
+from model.submodules.utils import draw_sample_prob, \
+    pad_r, linear_last, indices2metric, meshgrid, metric2indices, \
     weighted_mahalanobis_dists
 from model.submodules.bev_base import BEVBase
 from model.losses.edl import edl_mse_loss
@@ -40,16 +40,19 @@ class EviGausBEV(BEVBase):
         return linear_last(in_dim, 32, 6, bias=True)
 
     def draw_distribution(self, reg):
-        reg = reg.relu()
-        reg_evi = reg[:, :2]
-        reg_var = reg[:, 2:].view(-1, 2, 2)
-        ctrs = self.centers[:, :3]  # N 2
+        if not self.training or not self.sample_pixels:
+            reg = reg.relu()
+            reg_evi = reg[:, :2]
+            reg_var = reg[:, 2:].view(-1, 2, 2)
+            ctrs = self.centers[:, :3]  # N 2
 
-        dists = torch.zeros_like(ctrs[:, 1:].view(-1, 1, 2)) + self.nbrs
-        probs_weighted = weighted_mahalanobis_dists(reg_evi, reg_var, dists, self.var0)
-        evidence, obs_mask = self.get_evidence_map(probs_weighted, ctrs)
+            dists = torch.zeros_like(ctrs[:, 1:].view(-1, 1, 2)) + self.nbrs
+            probs_weighted = weighted_mahalanobis_dists(reg_evi, reg_var, dists, self.var0)
+            evidence, obs_mask = self.get_evidence_map(probs_weighted, ctrs)
+        else:
+            evidence = None
         self.out['evidence'] = evidence
-        return evidence, obs_mask
+        return evidence
 
     def get_evidence_map(self, probs_weighted, coor):
         voxel_new = coor[:, 1:].view(-1, 1, 2) + self.nbrs
@@ -74,10 +77,15 @@ class EviGausBEV(BEVBase):
         return evidence, obs_mask
 
     def loss(self, batch_dict):
-        tgt, indices = self.get_tgt(batch_dict)
-        evidence = self.out['evidence'][
-            indices[0], indices[1], indices[2]
-        ]
+        tgt, indices, bev_pts = self.get_tgt(batch_dict)
+        if self.out['evidence'] is not None:
+            evidence = self.out['evidence'][indices[0], indices[1], indices[2]]
+        else:
+            evidence = draw_sample_prob(self.centers[:, :3],
+                                        self.out['reg'].relu(),
+                                        bev_pts, self.res, self.distr_r, self.det_r,
+                                        batch_dict['batch_size'],
+                                        var0=self.var0)
         epoch_num = batch_dict.get('epoch', 0)
         loss, loss_dict = edl_mse_loss(self.name[:3], evidence, tgt,
                                        epoch_num, 2, self.annealing_step)

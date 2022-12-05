@@ -5,6 +5,7 @@ import torch
 import torch.nn.functional as F
 import matplotlib.pyplot as plt
 import numpy as np
+from sklearn.metrics import precision_recall_curve
 
 
 class Metric:
@@ -261,86 +262,202 @@ class MetricSemSeg(Metric):
         torch.save(self.result, filename)
 
 
-class MetricStaticIou(Metric):
+class MetricBevbase(Metric):
     def __init__(self, cfg, run_path, logger, name='test'):
-        super(MetricStaticIou, self).__init__(cfg, run_path)
+        super(MetricBevbase, self).__init__(cfg, run_path)
         self.filename = os.path.join(run_path, name)
+        self.filename_prefix = ''
         self.logger = logger
         self.cfg = cfg
         self.thrs = torch.arange(0.1, 1.1, 0.1)
         self.result = {
+            'iou_all': [],
+            'iou_obs': [],
+        }
+        self.inter_result = {
             'conf': [],
             'unc': [],
-            'gt_bev': [],
-            'iou_all': [],
+            'gt': []
         }
 
+        self.plot_data = {}
+        self.result_dict = {}
+
     def add_samples(self, out_dict):
-        obs_mask = out_dict['road_obs_mask']
-        self.result['conf'].append(out_dict['road_confidence'][obs_mask])
-        self.result['unc'].append(out_dict['road_uncertainty'][obs_mask])
-        self.result['gt_bev'].append(out_dict['road_bev'][obs_mask].bool())
-        pos_mask = torch.argmax(out_dict['road_confidence'], dim=-1).bool()
-        mi = torch.logical_and(pos_mask, out_dict['road_bev']).sum()
-        mu = torch.logical_or(pos_mask, out_dict['road_bev']).sum()
-        self.result['iou_all'].append(mi / mu)
+       raise NotImplementedError
 
-    def summary(self):
-        conf = torch.cat(self.result['conf'], dim=0)
-        unc = torch.cat(self.result['unc'], dim=0)
-        ious_all = torch.stack(self.result['iou_all'], dim=0).mean().item()
-        gt_bev = torch.cat(self.result['gt_bev'], dim=0)
+    def iou_all(self, conf, unc, gt_bev):
+        """
+        Compare the thresholded pred BEV map with the full gt BEV map (including non
+        observable area)
+        """
+        ious = []
+        for thr in self.thrs:
+            pos_mask = torch.argmax(conf, dim=-1).bool()
+            pos_mask = torch.logical_and(pos_mask, unc < thr)
+            mi = torch.logical_and(pos_mask, gt_bev).sum()
+            mu = torch.logical_or(pos_mask, gt_bev).sum()
+            ious.append(mi / mu)
+        self.result['iou_all'].append(torch.stack(ious, dim=0))
 
-        order_inds = torch.tensor(conf[:, 1]).argsort(descending=False)
-        tp_all = torch.logical_and(torch.argmax(conf).bool(), gt_bev)
-        tp_all = torch.tensor(tp_all)[order_inds]
-        list_accTP = tp_all.cumsum(dim=0)
-        list_precision = list_accTP.float() / torch.arange(1, len(unc) + 1).to(unc.device)
-        list_recall = list_accTP.float() / gt_bev.sum()
-        plt.plot(list_recall.numpy(), list_precision.numpy(), 'k.')
-        plt.savefig(os.path.join(self.filename, 'auc.png'))
+    def iou_obs(self, conf, unc, gt_bev, obs_mask):
+        """
+        Compare the thresholded pred BEV map with the gt BEV map that masked with observation mask.
+        """
+        ious = []
+        for thr in self.thrs:
+            pos_mask = torch.argmax(conf[obs_mask], dim=-1).bool()
+            unc_mask = unc[obs_mask] < thr
+            pos_mask = torch.logical_and(pos_mask, unc_mask)
+            gt = gt_bev[obs_mask]
+            mi = torch.logical_and(pos_mask, gt).sum()
+            mu = torch.logical_or(pos_mask, gt).sum()
+            ious.append(mi / mu)
+        self.result['iou_obs'].append(torch.stack(ious, dim=0))
+
+    def add_inter_data(self, out_dict):
+        raise NotImplementedError
+
+    def pr_curve(self, out_filename):
+        """Draw Precision-Recall Curce"""
+        conf = torch.cat(self.inter_result['conf'], dim=0)
+        unc = torch.cat(self.inter_result['unc'], dim=0)
+        gt = torch.cat(self.inter_result['gt'], dim=0)
+
+        lr_precision, lr_recall, _ = precision_recall_curve(gt.cpu().numpy(),
+                                                            conf[:, 1].cpu().numpy())
+
+        fig = plt.figure(figsize=(6, 6))
+        ax = fig.add_subplot()
+        ax.plot(lr_recall, lr_precision, 'k')
+        ax.set_xlim([0, 1])
+        ax.set_ylim([0, 1])
+        plt.savefig(os.path.join(self.filename, out_filename))
         plt.close()
+        self.plot_data['pr_curve'] = np.stack([lr_precision, lr_recall], axis=1)
 
+    def unc_Q(self, out_filename):
+        """Draw Uncertainty Quality bar plot : Accuracy vs. Uncertainty"""
+        conf = torch.cat(self.inter_result['conf'], dim=0)
+        unc = torch.cat(self.inter_result['unc'], dim=0)
+        gt_bev = torch.cat(self.inter_result['gt'], dim=0)
         ious = []
         recalls = []
+        T_ratios = []
         fig = plt.figure(figsize=(6, 6))
         for unc_thr in self.thrs:
             valid = torch.logical_and(unc < unc_thr, unc >= unc_thr - 0.1)
+            if valid.sum() == 0:
+                ious.append(0)
+                recalls.append(0)
+                T_ratios.append(0)
+                continue
             pos = torch.argmax(conf[valid], dim=-1) == 1
             tp = torch.logical_and(pos, gt_bev[valid]).sum()
-            fp = torch.logical_and(pos, torch.logical_not(gt_bev[valid])).sum()
-            fn = torch.logical_and(torch.logical_not(pos), gt_bev[valid]).sum()
+            T = torch.argmax(conf[valid], dim=-1) == gt_bev[valid]
+            T_ratio = T.sum().item() / len(gt_bev[valid])
+            # fp = torch.logical_and(pos, torch.logical_not(gt_bev[valid])).sum()
+            # fn = torch.logical_and(torch.logical_not(pos), gt_bev[valid]).sum()
             union = torch.logical_or(pos, gt_bev[valid]).sum()
-            tp_ratio = (tp / union).item()
-            fp_ratio = (fp / union).item()
-            fn_ratio = (fn / union).item()
+            # tp_ratio = (tp / union).item()
+            # fp_ratio = (fp / union).item()
+            # fn_ratio = (fn / union).item()
             iou = tp / union
             recall = tp / gt_bev.bool().sum()
             ious.append(iou * 100)
             recalls.append(recall * 100)
+            T_ratios.append(T_ratio)
 
-            plt.bar(unc_thr-0.05, [tp_ratio, fp_ratio, fn_ratio], width=0.08,
-                    bottom=[0, tp_ratio, tp_ratio+fp_ratio],
-                    color=['green', 'orange', 'blue'])
-        plt.savefig(os.path.join(self.filename, 'tp_fp_fn.png'))
+            plt.bar(unc_thr-0.05, [T_ratio], width=0.08,
+                    bottom=[0],
+                    color=['blue'])
+
+            # plt.bar(unc_thr-0.05, [T, fp_ratio, fn_ratio], width=0.08,
+            #         bottom=[0, tp_ratio, tp_ratio+fp_ratio],
+            #         color=['green', 'orange', 'blue'])
+        plt.savefig(os.path.join(self.filename, out_filename))
+        plt.close()
+        self.plot_data['unc_Q'] = T_ratios
+
+    def conf_Q(self):
+        conf = torch.cat(self.inter_result['conf'], dim=0)
+        gt_bev = torch.cat(self.inter_result['gt'], dim=0)
+        fig = plt.figure(figsize=(6, 6))
+        for thr in np.arange(1.0, 0, -0.1):
+            conf_max = conf.max(dim=-1)[0]
+            valid = torch.logical_and(conf_max < thr, conf_max >= thr - 0.1)
+            T = torch.argmax(conf[valid], dim=-1) == gt_bev[valid]
+            T_ratio = T.sum().item() / len(gt_bev[valid])
+            plt.bar(thr-0.05, [T_ratio], width=0.08,
+                    bottom=[0],
+                    color=['blue'])
+        plt.savefig(os.path.join(self.filename, 'conf_quality.png'))
         plt.close()
 
-        ss = \
-            "==================================================================================\n" \
-            "  Iou Overall: " f"{ious_all * 100:4.1f} \n"\
-            "          thr: " + "  ".join([f"{thr:4.1f} " for thr in self.thrs]) + "\n"\
-            "   static iou: " + "  ".join([f"{iou:4.1f} " for iou in ious]) + "\n"\
-            "static recall: " + "  ".join([f"{rc:4.1f} " for rc in recalls]) + "\n"\
+    def summary(self):
+        ious_all = torch.stack(self.result['iou_all'], dim=0).mean(dim=0) * 100
+        ious_obs = torch.stack(self.result['iou_obs'], dim=0).mean(dim=0) * 100
 
+        self.pr_curve(f"{self.filename_prefix}_prc.png")
+        self.unc_Q(f"{self.filename_prefix}_unc_q.png")
+
+        self.result_dict = {
+            "thr": self.thrs,
+            "iou all": ious_all,
+            "iou obs": ious_obs,
+        }
+
+        self.summary_hook()
+        self.plot_data.update(self.result_dict)
+        torch.save(self.plot_data, os.path.join(self.filename,
+                                                f'{self.filename_prefix}_plt_data.pth'))
+
+        ss = self.format_str(self.result_dict)
         print(ss)
         self.logger.write(ss)
 
+    def summary_hook(self):
+        pass
 
-class MetricDynamicIou(Metric):
+    def format_str(self, result_dict):
+        ss = "==================================================================================\n"
+        for k, vs in result_dict.items():
+            s1 = f"{k:20s} : "
+            if isinstance(vs, float):
+                s2 = f"{vs:4.1f} \n"
+            else:
+                s2 = "  ".join([f"{v:4.1f} " for v in vs]) + "\n"
+            ss += s1 + s2
+        return ss
+
+
+class MetricStaticIou(MetricBevbase):
     def __init__(self, cfg, run_path, logger, name='test'):
-        super(MetricDynamicIou, self).__init__(cfg, run_path)
-        self.filename = os.path.join(run_path, name)
-        self.logger = logger
+        super(MetricStaticIou, self).__init__(cfg, run_path, logger, name)
+        self.filename_prefix = 'surface'
+
+    def add_samples(self, out_dict):
+        out_dict['road_bev'] = out_dict['road_bev'].bool().int()
+        self.iou_all(out_dict['road_confidence'],
+                     out_dict['road_uncertainty'],
+                     out_dict['road_bev'])
+        self.iou_obs(out_dict['road_confidence'],
+                     out_dict['road_uncertainty'],
+                     out_dict['road_bev'],
+                     out_dict['road_obs_mask'])
+        self.add_inter_data(out_dict)
+
+    def add_inter_data(self, out_dict):
+        obs_mask = out_dict['road_obs_mask']
+        self.inter_result['conf'].append(out_dict['road_confidence'][obs_mask])
+        self.inter_result['unc'].append(out_dict['road_uncertainty'][obs_mask])
+        self.inter_result['gt'].append(out_dict['road_bev'][obs_mask])
+
+
+class MetricDynamicIou(MetricBevbase):
+    def __init__(self, cfg, run_path, logger, name='test'):
+        super(MetricDynamicIou, self).__init__(cfg, run_path, logger, name)
+        self.filename_prefix = 'object'
         voxel_size = cfg['voxel_size']
         self.vs = voxel_size[0] if \
             isinstance(voxel_size, list) \
@@ -348,27 +465,84 @@ class MetricDynamicIou(Metric):
         self.r = cfg['r']
         self.grid_size = int(self.r / self.vs)
         self.thrs = torch.arange(0.1, 1.1, 0.1)
-        self.result = {
-            'iou_global': [],
-            'ious_glob_gt_all': [],
+        self.result.update({
             'jiou': [],
             'iou': [],
             'jiou_boxwise': [],
             'iou_boxwise': [],
-        }
+        })
 
     def add_samples(self, out_dict):
         self.remove_ego_box(out_dict)
-        self.add_global_ious(out_dict)
+        gt_mask_all = self.get_gt_mask(out_dict, len(out_dict['box_bev_conf']))
+        out_dict['gt_mask'] = gt_mask_all
+        self.iou_all(out_dict['box_bev_conf'],
+                     out_dict['box_bev_unc'],
+                     gt_mask_all)
+        self.iou_obs(out_dict['box_bev_conf'],
+                     out_dict['box_bev_unc'],
+                     gt_mask_all,
+                     out_dict['box_obs_mask'])
+        self.add_inter_data(out_dict)
         self.add_box_ious(out_dict)
 
     def remove_ego_box(self, out_dict):
+        mask = torch.norm(out_dict[f'gt_boxes'][:, 1:3], dim=-1) > 1
+        gt_box_dim = out_dict['gt_boxes'][torch.logical_not(mask), 4:6].mean(dim=0)
+        s = int(out_dict['box_bev_unc'].shape[1] / 2)
+        res = self.r / s
+        inds = (gt_box_dim / res / 2).int()
+        out_dict['box_bev_unc'][:, s - inds[0].item():s + inds[0].item(),
+        s - inds[1].item():s + inds[1].item()] = 0.0
+        out_dict['box_obs_mask'][:, s - inds[0].item():s + inds[0].item(),
+        s - inds[1].item():s + inds[1].item()] = False
+        out_dict['box_bev_conf'][:, s - inds[0].item():s + inds[0].item(),
+        s - inds[1].item():s + inds[1].item(), 0] = 1.0
+        out_dict['box_bev_conf'][:, s - inds[0].item():s + inds[0].item(),
+        s - inds[1].item():s + inds[1].item(), 1] = 0.0
         for k in ['gt', 'pred']:
             mask = torch.norm(out_dict[f'{k}_boxes'][:, 1:3], dim=-1) > 1
             out_dict[f'{k}_boxes'] = out_dict[f'{k}_boxes'][mask]
             out_dict[f'{k}_box_samples'] = out_dict[f'{k}_box_samples'][mask]
             out_dict[f'{k}_box_unc'] = out_dict[f'{k}_box_unc'][mask]
             out_dict[f'{k}_box_conf'] = out_dict[f'{k}_box_conf'][mask]
+
+    def get_gt_mask(self, out_dict, batch_size):
+        gt_boxes = out_dict['gt_boxes']
+        s = self.grid_size * 2
+        gt_mask = torch.ones((batch_size, s, s), device=gt_boxes.device)
+        if len(gt_boxes) > 0:
+            indices = torch.stack(torch.where(gt_mask), dim=1)
+            ixy = indices.float()
+            ixy[:, 1:] = (ixy[:, 1:] + 0.5) * self.vs - self.r
+            ixyz = F.pad(ixy, (0, 1), 'constant', 0.0)
+            boxes = gt_boxes.clone()
+            boxes[:, 3] = 0
+            boxes_decomposed, box_idx_of_pts = points_in_boxes_gpu(
+                ixyz, boxes, batch_size=batch_size
+            )
+            inds = indices[box_idx_of_pts >= 0].T
+            gt_mask[inds[0], inds[1], inds[2]] = 0
+        gt_mask_all = torch.logical_not(gt_mask)
+        return gt_mask_all
+
+    def add_inter_data(self, out_dict):
+        obs_mask = out_dict['box_obs_mask']
+        gt_mask = out_dict['gt_mask']
+        self.inter_result['conf'].append(out_dict['box_bev_conf'][obs_mask])
+        self.inter_result['unc'].append(out_dict['box_bev_unc'][obs_mask])
+        self.inter_result['gt'].append(gt_mask[obs_mask])
+
+        # img = torch.zeros_like(out_dict['box_bev_conf'][..., [0, 0, 0]])
+        # pos = torch.argmax(out_dict['box_bev_conf'], dim=-1)
+        # img[..., 0] = obs_mask * torch.logical_and(pos, torch.logical_not(gt_mask)) \
+        #               * (out_dict['box_bev_conf'][..., 1] > 0.99)
+        # img[..., 1] = obs_mask # * (out_dict['box_bev_conf'][..., 1] <= 0.99)
+        # #
+        # plt.imshow(img[0].cpu().numpy())
+        # plt.savefig('/media/hdd/yuan/TMP/tmp.png')
+        # plt.close()
+        # print('d')
 
     def add_box_ious(self, out_dict):
         conf = out_dict['box_bev_conf'][..., 1]
@@ -461,8 +635,8 @@ class MetricDynamicIou(Metric):
             if i >= nbox:
                 ax.axis('off')
                 continue
-            iou = vis_ious[i]
-            jiou, _ = self.jiou(conf, vis_pred_boxes[i:i + 1],
+            # iou = vis_ious[i]
+            jiou, iou = self.jiou(conf, vis_pred_boxes[i:i + 1],
                                     vis_gt_boxes[i:i + 1])
             cf = vis_cfs[i]
             # ax.set_title(
@@ -485,17 +659,17 @@ class MetricDynamicIou(Metric):
             ax.axis('off')
             sam = vis_pred_sam[i].cpu().numpy()
             cur_conf = vis_pred_conf[i].cpu().numpy()
-            ax.scatter(sam[..., 0], sam[..., 1], c=cur_conf[..., 1], cmap='cool',
+            ax.scatter(sam[..., 0], sam[..., 1], c=cur_conf[..., 1], cmap='jet',
                        s=10, vmin=0, vmax=1)
             ax = draw_box_plt(
-                vis_pred_boxes[i:i + 1, 1:], ax, color='r'
+                vis_pred_boxes[i:i + 1, 1:], ax, color='k', linewidth_scale=2.0, linestyle='dashed'
             )
             sam = vis_gt_sam[i].cpu().numpy()
             cur_conf = vis_gt_conf[i].cpu().numpy()
-            ax.scatter(sam[..., 0], sam[..., 1], c=cur_conf[..., 1], cmap='cool',
+            ax.scatter(sam[..., 0], sam[..., 1], c=cur_conf[..., 1], cmap='jet',
                        s=10, vmin=0, vmax=1)
             ax = draw_box_plt(
-                vis_gt_boxes[i:i + 1, 1:], ax, color='g'
+                vis_gt_boxes[i:i + 1, 1:], ax, color='k', linewidth_scale=2.0
             )
         plt.savefig(os.path.join(self.filename, 'img',
                                  '_'.join(out_dict['frame_id'][0]) + '_3.png'),
@@ -503,7 +677,7 @@ class MetricDynamicIou(Metric):
         plt.close()
         # print('d')
 
-    def get_box_unc_from_sam_unc(self, box_sam_unc):
+    def get_box_unc_from_sam_unc(self, box_sam_unc, shrink=4):
         """
         Summarize one unc value for a box based on its sample unc.
         The final unc. is the min. from the mean unc of the 4 triangles of the box.
@@ -511,22 +685,24 @@ class MetricDynamicIou(Metric):
         :param box-sam_unc: (B, n, n)
         :return: box_unc: (B)
         """
-        tmp = box_sam_unc.cpu().numpy()
+        box_sam_unc_in_box = box_sam_unc[:, shrink:-shrink, shrink:-shrink]
+        nbox = len(box_sam_unc_in_box)
+        jiou = box_sam_unc_in_box.reshape(nbox, -1).sum(dim=1) \
+               / box_sam_unc.reshape(nbox, -1).sum(dim=1)
 
-        triangle = torch.ones_like(box_sam_unc)
+        triangle = torch.ones_like(box_sam_unc_in_box)
         triur = torch.triu(triangle).bool()
         trill = triur.permute(0, 2, 1)
         triul = torch.flip(triur, dims=(1,))
         trilr = torch.flip(trill, dims=(1,))
 
-        bs = triangle.shape[0]
-        unc_ur = box_sam_unc[triur].view(bs, -1).mean(dim=-1)
-        unc_ul = box_sam_unc[triul].view(bs, -1).mean(dim=-1)
-        unc_lr = box_sam_unc[trilr].view(bs, -1).mean(dim=-1)
-        unc_ll = box_sam_unc[trill].view(bs, -1).mean(dim=-1)
+        unc_ur = box_sam_unc_in_box[triur].view(nbox, -1).mean(dim=-1)
+        unc_ul = box_sam_unc_in_box[triul].view(nbox, -1).mean(dim=-1)
+        unc_lr = box_sam_unc_in_box[trilr].view(nbox, -1).mean(dim=-1)
+        unc_ll = box_sam_unc_in_box[trill].view(nbox, -1).mean(dim=-1)
 
         box_unc = torch.min(torch.stack([unc_ur, unc_ul, unc_ll, unc_lr],
-                                        dim=-1), dim=-1)[0]
+                                        dim=-1), dim=-1)[0] * jiou
 
         return box_unc
 
@@ -539,48 +715,6 @@ class MetricDynamicIou(Metric):
         batch_indices = bi_pred[mask].long()
         indices = torch.cat([batch_indices.view(1, -1), xy_indices], dim=0)
         return indices
-
-    def add_global_ious(self, out_dict):
-        conf = out_dict['box_bev_conf']
-        unc = out_dict['box_bev_unc']
-        pred_boxes = out_dict['pred_boxes']
-        gt_boxes = out_dict['gt_boxes']
-
-        ious_valid = []
-        # ious_obs = []
-        ious_all = []
-        for thr in self.thrs:
-            unc_mask = unc < thr
-            ious_valid.append(self.iou_global(conf, gt_boxes, unc_mask, unc_mask))
-            # ious_obs.append(iou)
-            ious_all.append(self.iou_global(conf, gt_boxes, unc_mask))
-        self.result['iou_global'].append(torch.stack(ious_valid, dim=0))
-        # self.result['iou_global_gt_obs'].append(torch.stack(ious_obs, dim=0))
-        self.result['ious_glob_gt_all'].append(torch.stack(ious_all, dim=0))
-
-    def iou_global(self, conf, gt_boxes, unc_mask, gt_mask=None):
-        gt_mask_out = torch.zeros_like(conf[..., 0])
-        if gt_mask is None:
-            gt_mask = gt_mask_out + 1
-
-        indices = torch.stack(torch.where(gt_mask), dim=1)
-        ixy = indices.float()
-        ixy[:, 1:] = (ixy[:, 1:] + 0.5) * self.vs - self.r
-        ixyz = F.pad(ixy, (0, 1), 'constant', 0.0)
-        boxes = gt_boxes.clone()
-        boxes[:, 3] = 0
-        boxes_decomposed, box_idx_of_pts = points_in_boxes_gpu(
-            ixyz, boxes, batch_size=conf.shape[0]
-        )
-        inds = indices[box_idx_of_pts >= 0].T
-        gt_mask_out[inds[0], inds[1], inds[2]] = 1
-        pos_mask = torch.logical_and(torch.argmax(conf, dim=-1).bool(),
-                                     unc_mask)
-        mi = torch.logical_and(gt_mask_out.bool(), pos_mask)
-        mu = torch.logical_or(gt_mask_out.bool(), pos_mask)
-        iou = mi.sum() / mu.sum()
-        return iou
-
 
     def jiou(self, conf, pred_boxes, gt_boxes):
         if len(pred_boxes)==0 or len(gt_boxes)==0:
@@ -621,9 +755,7 @@ class MetricDynamicIou(Metric):
         iou = mi.sum() / mu.sum()
         return jiou, iou
 
-    def summary(self):
-        ious_glob = torch.stack(self.result['iou_global'], dim=0).mean(dim=0) * 100
-        ious_glob_gt_all = torch.stack(self.result['ious_glob_gt_all'], dim=0).mean(dim=0) * 100
+    def summary_hook(self):
 
         jiou_oa = torch.stack(self.result['jiou'], dim=0).mean() * 100
         iou_oa = torch.stack(self.result['iou'], dim=0).mean() * 100
@@ -633,18 +765,13 @@ class MetricDynamicIou(Metric):
         ious_boxwise= torch.stack(self.result['iou_boxwise'], dim=0)
         ious_boxwise = (ious_boxwise.sum(dim=0) / ious_boxwise.bool().sum(dim=0)) * 100
 
-        ss = \
-            "=================================Dynamic=====================================\n" \
-            "      JIoU Overall: " + f"{jiou_oa.item():4.1f} \n" \
-            "       IoU Overall: " + f"{iou_oa.item():4.1f} \n" \
-            "               thr: " + " ".join([f"{thr:4.1f} " for thr in self.thrs]) + "\n" \
-            "        iou global: " + " ".join([f"{iou:4.1f} " for iou in ious_glob]) + "\n" \
-            " iou global gt all: " + " ".join([f"{iou:4.1f} " for iou in ious_glob_gt_all]) + "\n" \
-            "      jiou_boxwise: " + " ".join([f"{jiou:4.1f} " for jiou in jious_boxwise]) + "\n" \
-            "      iou_boxwise : " + " ".join([f"{iou:4.1f} " for iou in ious_boxwise]) + "\n"
+        self.result_dict.update({
+            'jiou_boxwise': jious_boxwise,
+            'iou boxewise': ious_boxwise,
+            'jiou overall': jiou_oa.item(),
+            'iou overall': iou_oa.item()
+        })
 
-        print(ss)
-        self.logger.write(ss)
 
 
 

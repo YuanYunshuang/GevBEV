@@ -47,14 +47,14 @@ class BEV(BEVBase):
                                device=reg_evi.device)
         inds = metric2indices(ctrs, self.res).T
         inds[1:] += self.size
-        obs_mask = evidence[..., 0].bool()
-        obs_mask[inds[0], inds[1], inds[2]] = True
+        # obs_mask = evidence[..., 0].bool()
+        # obs_mask[inds[0], inds[1], inds[2]] = True
         evidence[inds[0], inds[1], inds[2]] = reg_evi
         self.out['evidence'] = evidence
-        return evidence.softmax(dim=-1), obs_mask
+        return evidence.softmax(dim=-1)
 
     def loss(self, batch_dict):
-        tgt, indices = self.get_tgt(batch_dict)
+        tgt, indices, _ = self.get_tgt(batch_dict)
         preds = self.out['evidence'][
             indices[0], indices[1], indices[2]
         ]

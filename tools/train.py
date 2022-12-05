@@ -86,7 +86,7 @@ def train_one_epoch(train_dataloader, model, optimizer, lr_scheduler, epoch, log
         if logger is not None:
             logger.log(epoch, iteration, lr_scheduler.get_last_lr()[0], **loss_dict)
 
-        if (iteration + 1) // 20 == 0:
+        if (iteration + 1) % 20 == 0:
             torch.save({
                 'epoch': epoch,
                 'iteration': iteration,

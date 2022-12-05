@@ -91,7 +91,7 @@ def plot_keypoints_match(batch_dict):
     plt.close()
 
 
-def draw_box_plt(boxes_dec, ax, color=None, linewidth_scale=2.0):
+def draw_box_plt(boxes_dec, ax, color=None, linewidth_scale=2.0, linestyle='solid'):
     """
     draw boxes in a given plt ax
     :param boxes_dec: (N, 5) or (N, 7) in metric
@@ -125,8 +125,13 @@ def draw_box_plt(boxes_dec, ax, color=None, linewidth_scale=2.0):
               - y[:, None]) * (np.cos(theta)) + y[:, None]
     corners = np.stack([new_x, new_y], axis=2)
     for corner in corners:
-        ax.plot(corner[[0,1,2,3,0], 0], corner[[0,1,2,3,0], 1], color=color, linewidth=0.5*linewidth_scale)
-        # draw front line (
+        ax.plot(corner[[0,1,2,3,0], 0], corner[[0,1,2,3,0], 1], color=color,
+                linewidth=linewidth_scale, linestyle=linestyle)
+        # draw direction
+        # front = corner[[2, 3]].mean(axis=0)
+        # center = corner.mean(axis=0)
+        # ax.plot([front[0], center[0]], [front[1], center[1]], color=color,
+        #         linewidth=linewidth_scale)
         ax.plot(corner[[2, 3], 0], corner[[2, 3], 1], color=color, linewidth=1.5*linewidth_scale)
     return ax
 

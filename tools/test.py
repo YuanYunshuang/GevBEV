@@ -11,18 +11,11 @@ from config import load_yaml
 
 
 def test(cfgs, args):
-    seed_everything(1234)
+    # seed_everything(1234)
     device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
-
-    test_dataloader = get_dataloader(cfgs['DATASET'], mode='test',)
-    post_processor = test_dataloader.dataset.post_process
-    model = get_model(cfgs['MODEL']).to(device)
 
     # load checkpoint
     log_dir = cfgs['TRAIN']['log_dir']
-    ckpt = torch.load(os.path.join(log_dir, 'last.pth'))
-    load_model_dict(model, ckpt['model_state_dict'])
-    model.eval()
 
     # set paths
     out_img_dir = os.path.join(log_dir, 'test', 'img')
@@ -38,15 +31,31 @@ def test(cfgs, args):
             metrics_instances.append(metric_cls(cfgs['TEST']['metrics'][metric_name],
                                                 log_dir, logger))
 
-    # outfiles = glob.glob(os.path.join(out_inf_dir, '*.pth'))
-    # if len(outfiles) > 0:
-    #     for f in outfiles:
-    #         out_dict = torch.load(f)
-    #         for metric in metrics_instances:
-    #             metric.add_samples(out_dict)
-    #     for metric in metrics_instances:
-    #         metric.summary()
-    #     return
+    outfiles = glob.glob(os.path.join(out_inf_dir, '*.pth'))
+    i = 0
+    if len(outfiles) > 0:
+        for f in tqdm.tqdm(outfiles):
+            if i > 10:
+                break
+            out_dict = torch.load(f)
+            i += 1
+            for metric in metrics_instances:
+                metric.add_samples(out_dict)
+        for metric in metrics_instances:
+            metric.summary()
+        return
+
+    # load models
+    test_dataloader = get_dataloader(cfgs['DATASET'], mode='test',)
+    post_processor = test_dataloader.dataset.post_process
+    model = get_model(cfgs['MODEL']).to(device)
+
+    # load checkpoint
+    ckpt = torch.load(os.path.join(log_dir, 'last.pth'))
+    load_model_dict(model, ckpt['model_state_dict'])
+    model.eval()
+
+
 
     result = []
     batch_idx = 0
@@ -54,14 +63,15 @@ def test(cfgs, args):
         model.eval()
         for batch_data in tqdm.tqdm(test_dataloader):
             batch_idx += 1
-            if batch_idx > 20:
-                break
+            # if batch_idx > 3:
+            #     break
             load_tensors_to_gpu(batch_data)
             # Forward pass
             model(batch_data)
             # loss_dict = model.loss(batch_data)
             # result.append(loss_dict)
             out_dict = post_processor(batch_data)
+            torch.save(out_dict, os.path.join(log_dir, 'test', 'inf', f"{batch_idx}.pth"))
             for metric in metrics_instances:
                 metric.add_samples(out_dict)
 

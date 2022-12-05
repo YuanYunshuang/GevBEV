@@ -49,7 +49,8 @@ class DetectionS1(nn.Module):
         self.device = getattr(self, 'device', 'cuda')
         self.grid_size = int(self.det_r / self.voxel_size / self.stride * 2)
         self.r = int(self.det_r / self.voxel_size)
-        self.x_min = - (self.r + self.stride - self.r % self.stride)                # relevant to ME
+        self.x_max = (self.r - 1) // self.stride * self.stride        # relevant to ME
+        self.x_min = - (self.x_max + self.stride)                     # relevant to ME
         self.anchors = self.generate_anchors().to(self.device)
         # intermediate result
         self.xy = None
