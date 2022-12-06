@@ -65,7 +65,7 @@ class BaseDataset(Dataset):
             - lidar_idx: np.ndarray [N,], indices for lidar data from different cavs,
               in the case of mono view, this can be None or an array of zeros
             - boxes: np.ndarray [M, 7+c], first 7 columns must be
-              (x, y, z, dx, dy, dz, r) of the bounding boxes
+              (x, y, z, dx, dy, dz, det_r) of the bounding boxes
             - bevmap_static: boolean np.ndarray [H, W]
             - bevmap_dynamic: boolean np.ndarray [H, W]
         """
@@ -133,6 +133,7 @@ class BaseDataset(Dataset):
             points = points.reshape(-1, 2, 1) + np.random.normal(0, 3, (len(points), 2, 10))
             points = np.unique(points // res, axis=0) * res
             points = points.transpose(0, 2, 1).reshape(-1, 2)
+            points = points + np.random.normal(0, 1, (len(points), 2))
 
             h, w = bevmap_static.shape
             pixels_per_meter = 1 / self.cfgs['bev_res']
@@ -149,12 +150,14 @@ class BaseDataset(Dataset):
             # sample dynamic points
             labels[bev_dynamic > 0, 1] = 1
             bev_pts = np.concatenate([points, labels], axis=1)
+            # sample static points
             neg_idx = np.where(bev_pts[:, -2] == 0)[0]
             if len(neg_idx) > 3000:
                 neg_idx = np.random.choice(neg_idx, 3000)
             road_idx = np.where(bev_pts[:, -2] == 1)[0]
             if len(road_idx) > 3000:
                 road_idx = np.random.choice(road_idx, 3000)
+
             veh_idx = np.where(bev_pts[:, -1] == 1)[0]
             selected = np.concatenate([neg_idx, road_idx, veh_idx], axis=0)
             np.random.shuffle(selected)
@@ -187,7 +190,7 @@ class BaseDataset(Dataset):
         :param data_dict: a dict contains:
                          - 'lidar': np.ndarray [N1, 3+c], columns 1-3 are x, y, z
                          - 'pts': np.ndarray [N2, 2], columns 1-2 are x, y
-                         - 'boxes': np.ndarray [N3, 7+c], columns 1-7 are x, y, z, dx, dy, dz, r
+                         - 'boxes': np.ndarray [N3, 7+c], columns 1-7 are x, y, z, dx, dy, dz, det_r
         :return: the same dict with augmented data
         """
         lidars = data_dict['lidar']

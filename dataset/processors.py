@@ -112,17 +112,17 @@ class DistributionPostProcess(object):
 
         conf, unc = self.evidence_to_conf_unc(evidence)
 
-        # centers = batch_dict['distr_object']['centers']
-        # reg = batch_dict['distr_object']['reg'].relu()
-        # pred_sam_coor, pred_box_unc, pred_box_conf = \
-        #     self.get_sample_probs_metirc(pred_boxes, centers, reg)
-        # gt_sam_coor, gt_box_unc, gt_box_conf = \
-        #     self.get_sample_probs_metirc(gt_boxes, centers, reg)
-
+        centers = batch_dict['distr_object']['centers']
+        reg = batch_dict['distr_object']['reg'].relu()
         pred_sam_coor, pred_box_unc, pred_box_conf = \
-            self.get_sample_probs_pixel(pred_boxes, unc, conf)
+            self.get_sample_probs_metirc(pred_boxes, centers, reg)
         gt_sam_coor, gt_box_unc, gt_box_conf = \
-            self.get_sample_probs_pixel(gt_boxes, unc, conf)
+            self.get_sample_probs_metirc(gt_boxes, centers, reg)
+
+        # pred_sam_coor, pred_box_unc, pred_box_conf = \
+        #     self.get_sample_probs_pixel(pred_boxes, unc, conf)
+        # gt_sam_coor, gt_box_unc, gt_box_conf = \
+        #     self.get_sample_probs_pixel(gt_boxes, unc, conf)
 
         self.out.update({
             'box_bev_unc': unc,
@@ -166,7 +166,7 @@ class DistributionPostProcess(object):
         bevmap[..., 2] = 255 * confs_np[..., 0]
         bevmap[..., 1] = 255 * confs_np[..., 1]
         gt_bevmap = np.zeros((grid_size, grid_size, 3))
-        gt_bevmap[..., 1] = road_bev
+        gt_bevmap[..., 1] = road_bev * 255
 
         fig = plt.figure(figsize=(13, 6))
         axs = fig.subplots(1, 3)

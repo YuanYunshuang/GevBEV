@@ -158,15 +158,15 @@ class MetricObjDet(Metric):
         recallValid = []
         # For each recallValues (0, 0.1, 0.2, ... , 1)
         for r in recallValues:
-            # Obtain all recall values higher or equal than r
+            # Obtain all recall values higher or equal than det_r
             argGreaterRecalls = np.argwhere(mrec[:] >= r)
             pmax = 0
-            # If there are recalls above r
+            # If there are recalls above det_r
             if argGreaterRecalls.size != 0:
                 pmax = max(mpre[argGreaterRecalls.min():])
             recallValid.append(r)
             rhoInterp.append(pmax)
-        # By definition AP = sum(max(precision whose recall is above r))/11
+        # By definition AP = sum(max(precision whose recall is above det_r))/11
         ap = sum(rhoInterp) / 11
         # Generating values for the plot
         rvals = []
@@ -435,6 +435,7 @@ class MetricStaticIou(MetricBevbase):
     def __init__(self, cfg, run_path, logger, name='test'):
         super(MetricStaticIou, self).__init__(cfg, run_path, logger, name)
         self.filename_prefix = 'surface'
+        self.stride = self.cfg['stride']
 
     def add_samples(self, out_dict):
         out_dict['road_bev'] = out_dict['road_bev'].bool().int()
@@ -458,12 +459,13 @@ class MetricDynamicIou(MetricBevbase):
     def __init__(self, cfg, run_path, logger, name='test'):
         super(MetricDynamicIou, self).__init__(cfg, run_path, logger, name)
         self.filename_prefix = 'object'
+        self.stride = self.cfg['stride']
         voxel_size = cfg['voxel_size']
         self.vs = voxel_size[0] if \
             isinstance(voxel_size, list) \
             else voxel_size
-        self.r = cfg['r']
-        self.grid_size = int(self.r / self.vs)
+        self.det_r = cfg['det_r']
+        self.grid_size = int(self.det_r / self.vs / self.stride)
         self.thrs = torch.arange(0.1, 1.1, 0.1)
         self.result.update({
             'jiou': [],
@@ -490,7 +492,7 @@ class MetricDynamicIou(MetricBevbase):
         mask = torch.norm(out_dict[f'gt_boxes'][:, 1:3], dim=-1) > 1
         gt_box_dim = out_dict['gt_boxes'][torch.logical_not(mask), 4:6].mean(dim=0)
         s = int(out_dict['box_bev_unc'].shape[1] / 2)
-        res = self.r / s
+        res = self.det_r / s
         inds = (gt_box_dim / res / 2).int()
         out_dict['box_bev_unc'][:, s - inds[0].item():s + inds[0].item(),
         s - inds[1].item():s + inds[1].item()] = 0.0
@@ -514,7 +516,7 @@ class MetricDynamicIou(MetricBevbase):
         if len(gt_boxes) > 0:
             indices = torch.stack(torch.where(gt_mask), dim=1)
             ixy = indices.float()
-            ixy[:, 1:] = (ixy[:, 1:] + 0.5) * self.vs - self.r
+            ixy[:, 1:] = (ixy[:, 1:] + 0.5) * self.vs * self.stride - self.det_r
             ixyz = F.pad(ixy, (0, 1), 'constant', 0.0)
             boxes = gt_boxes.clone()
             boxes[:, 3] = 0
@@ -535,9 +537,9 @@ class MetricDynamicIou(MetricBevbase):
 
         # img = torch.zeros_like(out_dict['box_bev_conf'][..., [0, 0, 0]])
         # pos = torch.argmax(out_dict['box_bev_conf'], dim=-1)
-        # img[..., 0] = obs_mask * torch.logical_and(pos, torch.logical_not(gt_mask)) \
-        #               * (out_dict['box_bev_conf'][..., 1] > 0.99)
-        # img[..., 1] = obs_mask # * (out_dict['box_bev_conf'][..., 1] <= 0.99)
+        # img[..., 0] = out_dict['box_bev_conf'][..., 1]
+        #
+        # img[..., 1] = gt_mask # * (out_dict['box_bev_conf'][..., 1] <= 0.99)
         # #
         # plt.imshow(img[0].cpu().numpy())
         # plt.savefig('/media/hdd/yuan/TMP/tmp.png')
@@ -708,7 +710,7 @@ class MetricDynamicIou(MetricBevbase):
 
     def get_indices(self, box_samples, boxes):
         s = box_samples.shape[1]
-        xy = torch.floor((box_samples + self.r) / self.vs).long()
+        xy = torch.floor((box_samples + self.det_r) / self.vs).long()
         mask = torch.logical_and(xy >= 0, xy < self.grid_size * 2).all(dim=-1)
         xy_indices = xy[mask].T
         bi_pred = torch.tile(boxes[:, 0].view(-1, 1, 1), (1, s, s))
@@ -721,7 +723,7 @@ class MetricDynamicIou(MetricBevbase):
             return torch.tensor(0, device=conf.device), torch.tensor(0, device=conf.device)
         indices = torch.stack(torch.where(conf > 0), dim=1)
         ixy = indices.float()
-        ixy[:, 1:] = (ixy[:, 1:] + 0.5) * self.vs - self.r
+        ixy[:, 1:] = (ixy[:, 1:] + 0.5) * self.vs - self.det_r
         ixyz = F.pad(ixy, (0, 1), 'constant', 0.0)
         # pred
         boxes = pred_boxes.clone()

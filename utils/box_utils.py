@@ -112,7 +112,7 @@ def encode_boxes_relative_torch(points, boxes, lwh_mean):
 def boxes_to_corners_2d(boxes_np):
     """
     Convert boxes to 4 corners in xy plane
-    :param boxes_np: np.ndarray [N, 7], cols - (x,y,z,dx,dy,dz,r)
+    :param boxes_np: np.ndarray [N, 7], cols - (x,y,z,dx,dy,dz,det_r)
     :return: corners: np.ndarray [N, 4, 2], corner order is
     back left, front left, front back, back left
     """

@@ -257,14 +257,21 @@ class BEVBase(nn.Module):
     @torch.no_grad()
     def get_tgt(self, batch_dict, discrete=False):
         obs_mask = batch_dict['distr_conv_out'][f'p{self.stride}']['obs_mask']
-        tgt_pts, indices = self.sample_tgt_pts(obs_mask, discrete)
 
         if self.name == 'surface':
-            ixy = metric2indices(tgt_pts, 0.2).long().T
-            gt_bev = batch_dict['bevmap_static']  # gt has res=0.2
-            ixy[1:] += int(gt_bev.shape[1] / 2)
-            tgt_label = gt_bev[ixy[0], ixy[1], ixy[2]].bool().int()
+            tgt_bev_pts = fuse_batch_indices(batch_dict['target_bev_pts'],
+                                             batch_dict['num_cav'])
+            tgt_pts = tgt_bev_pts[:, :3]
+            indices, mask = self.pts_to_masked_indices(tgt_pts)
+            tgt_pts = tgt_pts[mask]
+            tgt_label = tgt_bev_pts[mask, 3]
+            # sample new tgt with bev map
+            # ixy = metric2indices(tgt_pts, 0.2).long().T
+            # gt_bev = batch_dict['bevmap_static'].permute(0, 2, 1).flip(dims=(1,)) # gt has res=0.2
+            # ixy[1:] += int(gt_bev.shape[1] / 2)
+            # tgt_label = gt_bev[ixy[0], ixy[1], ixy[2]].bool().int()
         else:  # object
+            tgt_pts, indices = self.sample_tgt_pts(obs_mask, discrete)
             boxes = batch_dict['target_boxes'].clone()
             boxes[:, 3] = 0
             pts = pad_r(tgt_pts)
@@ -290,7 +297,7 @@ class BEVBase(nn.Module):
         #         boxes_gt=batch_dict['target_boxes'][batch_dict['target_boxes'][:, 0] == 0, 1:]
         #     )
         #     raise NotImplementedError
-        tgt_label = tgt_label.bool()
+        tgt_label = tgt_label > 0
         return tgt_pts[mask], tgt_label[mask], indices[mask]
 
 

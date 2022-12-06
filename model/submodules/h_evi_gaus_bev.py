@@ -12,6 +12,11 @@ from model.losses.edl import edl_mse_loss
 class EviGausBEV(BEVBase):
     def __init__(self, cfgs):
         super(EviGausBEV, self).__init__(cfgs)
+        res = self.stride * self.voxel_size
+        steps = int(self.distr_r / res) * 2 + 1
+        offset = meshgrid(-self.distr_r, self.distr_r, 2,
+                          n_steps=steps).cuda().view(-1, 2)
+        self.nbrs = offset[torch.norm(offset, dim=1) < 2].view(1, -1, 2)
 
     def get_reg_layer(self, in_dim):
         return linear_last(in_dim, 32, 6, bias=True)
@@ -53,6 +58,17 @@ class EviGausBEV(BEVBase):
 
     def loss(self, batch_dict):
         tgt_pts, tgt_labels, indices = self.get_tgt(batch_dict)
+
+        # import matplotlib.pyplot as plt
+        # pts = self.centers[:, 1:3].cpu().numpy().T
+        # plt.plot(pts[0], pts[1], '.b')
+        # pts = tgt_pts[:, 1:3].cpu().numpy().T
+        # plt.plot(pts[0], pts[1], '.r')
+        # pts = tgt_pts[tgt_labels, 1:3].cpu().numpy().T
+        # plt.plot(pts[0], pts[1], '.g')
+        # plt.show()
+        # plt.close()
+
         evidence = draw_sample_prob(self.centers[:, :3],
                                     self.out['reg'].relu(),
                                     tgt_pts, self.res, self.distr_r, self.det_r,

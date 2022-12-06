@@ -66,7 +66,7 @@ def plot_keypoints_match(batch_dict):
     ax = fig.add_subplot(121)
     # plot keypoints
     ax.plot(kpts_ego[:, 0], kpts_ego[:, 1], '.g', markersize=5)
-    ax.plot(kpts_coop[:, 0], kpts_coop[:, 1], '.r', markersize=5)
+    ax.plot(kpts_coop[:, 0], kpts_coop[:, 1], '.det_r', markersize=5)
     # plot matches
     mask = match_pred < len(kpts_ego)
 
@@ -77,7 +77,7 @@ def plot_keypoints_match(batch_dict):
     ax = fig.add_subplot(122)
     # plot keypoints
     ax.plot(kpts_ego[:, 0], kpts_ego[:, 1], '.g', markersize=5)
-    ax.plot(kpts_coop[:, 0], kpts_coop[:, 1], '.r', markersize=5)
+    ax.plot(kpts_coop[:, 0], kpts_coop[:, 1], '.det_r', markersize=5)
     # plot matches
     mask = match_gt < len(kpts_ego)
     for p1, p2 in zip(kpts_coop[mask], kpts_ego[valid_indices_gt]):
