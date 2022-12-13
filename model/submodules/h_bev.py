@@ -33,9 +33,7 @@ class BEV(BEVBase):
     def loss(self, batch_dict):
         tgt_pts, tgt_label, indices = self.get_tgt(batch_dict, discrete=True)
         preds_map = self.draw_distribution(self.out['reg'])
-        preds = preds_map[
-            indices[0], indices[1], indices[2]
-        ]
+        preds = preds_map[indices[0], indices[1], indices[2]]
         loss = cross_entroy_with_logits(preds, tgt_label, 2, reduction='mean')
         ss = preds.detach()
         tt = tgt_label.detach()

@@ -346,7 +346,8 @@ class MetricBevbase(Metric):
         T_ratios = []
         fig = plt.figure(figsize=(6, 6))
         for unc_thr in self.thrs:
-            valid = torch.logical_and(unc < unc_thr, unc >= unc_thr - 0.1)
+            valid = torch.logical_and(unc < unc_thr, unc > unc_thr - 0.1)
+            # valid = unc < unc_thr
             if valid.sum() == 0:
                 ious.append(0)
                 recalls.append(0)
@@ -354,8 +355,16 @@ class MetricBevbase(Metric):
                 continue
             pos = torch.argmax(conf[valid], dim=-1) == 1
             tp = torch.logical_and(pos, gt_bev[valid]).sum()
+            # precision = tp / pos.sum()
+            # T_ratio = precision.item()
             T = torch.argmax(conf[valid], dim=-1) == gt_bev[valid]
-            T_ratio = T.sum().item() / len(gt_bev[valid])
+            gt = gt_bev[valid].int()
+            npos = gt.sum()
+            nneg = torch.logical_not(gt).sum()
+            wpos = 1 / npos
+            wneg = 1 / nneg
+            weights = gt * wpos + (1 - gt) * wneg
+            T_ratio = weights[T].sum().item() / weights.sum().item()
             # fp = torch.logical_and(pos, torch.logical_not(gt_bev[valid])).sum()
             # fn = torch.logical_and(torch.logical_not(pos), gt_bev[valid]).sum()
             union = torch.logical_or(pos, gt_bev[valid]).sum()
@@ -377,29 +386,38 @@ class MetricBevbase(Metric):
             #         color=['green', 'orange', 'blue'])
         plt.savefig(os.path.join(self.filename, out_filename))
         plt.close()
-        self.plot_data['unc_Q'] = T_ratios
+        self.plot_data['unc_Q'] = np.array(T_ratios)
 
-    def conf_Q(self):
+    def conf_Q(self, out_filename):
         conf = torch.cat(self.inter_result['conf'], dim=0)
         gt_bev = torch.cat(self.inter_result['gt'], dim=0)
         fig = plt.figure(figsize=(6, 6))
-        for thr in np.arange(1.0, 0, -0.1):
-            conf_max = conf.max(dim=-1)[0]
-            valid = torch.logical_and(conf_max < thr, conf_max >= thr - 0.1)
-            T = torch.argmax(conf[valid], dim=-1) == gt_bev[valid]
-            T_ratio = T.sum().item() / len(gt_bev[valid])
+        T_ratios = []
+        for thr in self.thrs:
+            valid = torch.logical_and(conf[:, 1] <= thr, conf[:, 1] > thr - 0.1)
+            gt = gt_bev[valid].int()
+            T = torch.argmax(conf[valid], dim=-1) == gt
+            npos = gt.sum()
+            nneg = torch.logical_not(gt).sum()
+            wpos = 1 / npos
+            wneg = 1 / nneg
+            weights = gt * wpos + (1 - gt) * wneg
+            T_ratio = weights.sum().item() / weights.sum().item()
+            T_ratios.append(T_ratio)
             plt.bar(thr-0.05, [T_ratio], width=0.08,
                     bottom=[0],
                     color=['blue'])
-        plt.savefig(os.path.join(self.filename, 'conf_quality.png'))
+        plt.savefig(os.path.join(self.filename, out_filename))
         plt.close()
+        self.plot_data['unc_Q'] = T_ratios
 
     def summary(self):
         ious_all = torch.stack(self.result['iou_all'], dim=0).mean(dim=0) * 100
         ious_obs = torch.stack(self.result['iou_obs'], dim=0).mean(dim=0) * 100
 
-        self.pr_curve(f"{self.filename_prefix}_prc.png")
+        # self.pr_curve(f"{self.filename_prefix}_prc.png")
         self.unc_Q(f"{self.filename_prefix}_unc_q.png")
+        # self.conf_Q(f"{self.filename_prefix}_conf_q.png")
 
         self.result_dict = {
             "thr": self.thrs,
@@ -429,6 +447,7 @@ class MetricBevbase(Metric):
                 s2 = "  ".join([f"{v:4.1f} " for v in vs]) + "\n"
             ss += s1 + s2
         return ss
+
 
 
 class MetricStaticIou(MetricBevbase):
@@ -547,7 +566,14 @@ class MetricDynamicIou(MetricBevbase):
         # print('d')
 
     def add_box_ious(self, out_dict):
-        conf = out_dict['box_bev_conf'][..., 1]
+        conf = out_dict['box_bev_conf_p1']
+        unc = out_dict['box_bev_unc_p1']
+        if conf is not None:
+            conf = conf[..., 1]
+            stride = 1
+        else:
+            conf = out_dict['box_bev_conf'][..., 1]
+            stride = 2
         pred_box_conf = self.get_box_unc_from_sam_unc(out_dict['pred_box_conf'][..., 1])
         # gt_box_unc = out_dict['gt_box_unc']
         pred_box_sam = out_dict['pred_box_samples']
@@ -599,7 +625,7 @@ class MetricDynamicIou(MetricBevbase):
             cur_pred_box = pred_boxes[pred_msk]
             cur_gt_box = aligned_gt_boxes[gt_msk]
 
-            jiou, iou = self.jiou(conf, cur_pred_box, cur_gt_box)
+            jiou, iou = self.jiou(conf, cur_pred_box, cur_gt_box, stride)
             jious_boxwise.append(jiou)
             ious_boxwise.append(iou)
         jiou_oa, iou_oa = self.jiou(conf, pred_boxes[pred_box_conf > 0.0], gt_boxes)
@@ -609,77 +635,85 @@ class MetricDynamicIou(MetricBevbase):
         self.result['jiou_boxwise'].append(torch.stack(jious_boxwise, dim=0))
         self.result['iou_boxwise'].append(torch.stack(ious_boxwise, dim=0))
 
-        mpred = pred_boxes[:, 0] == 0
-        malin = aligned_mask[mpred]
-        vis_pred_boxes = pred_boxes[mpred][malin]
-        vis_gt_boxes = aligned_gt_boxes[mpred][malin]
-        nbox = len(vis_pred_boxes)
-        if nbox<4:
-            return
-        cols = 3
-        rows = int(np.ceil(nbox / cols))
-        fig = plt.figure(figsize=(7, rows * 1.4))
-        axes = fig.subplots(rows, cols)
+        # mpred = pred_boxes[:, 0] == 0
+        # malin = aligned_mask[mpred]
+        # vis_pred_boxes = pred_boxes[mpred][malin]
+        # vis_gt_boxes = aligned_gt_boxes[mpred][malin]
+        # nbox = len(vis_pred_boxes)
+        # if nbox<4:
+        #     return
+        # cols = 3
+        # rows = int(np.ceil(nbox / cols))
+        # fig = plt.figure(figsize=(7, rows * 1.4 + 1))
+        # axes = fig.subplots(rows, cols)
+        #
+        # vis_cfs = pred_box_conf[mpred][malin]
+        # sort_idx = torch.argsort(vis_cfs, descending=True)
+        # vis_cfs = vis_cfs[sort_idx]
+        # vis_ious = aligned_ious[mpred][malin][sort_idx]
+        # vis_gt_boxes = vis_gt_boxes[sort_idx]
+        # vis_pred_boxes = vis_pred_boxes[sort_idx]
+        # vis_pred_sam = pred_box_sam[mpred][malin][sort_idx]
+        # vis_gt_sam = aligned_gt_sam[mpred][malin][sort_idx]
+        # vis_pred_conf = out_dict['pred_box_conf'][mpred][malin][sort_idx]
+        # vis_gt_conf = aligned_gt_box_conf[mpred][malin][sort_idx]
+        # from utils.vislib import draw_box_plt
+        # import matplotlib as mpl
+        # cmap = mpl.cm.get_cmap('RdYlGn')
+        # norm = mpl.colors.Normalize(vmin=0, vmax=1)
+        # for i in range(cols * rows):
+        #     ax = axes[i // cols, i % cols]
+        #     if i >= nbox:
+        #         ax.axis('off')
+        #         continue
+        #     # iou = vis_ious[i]
+        #     jiou, iou = self.jiou(conf, vis_pred_boxes[i:i + 1],
+        #                           vis_gt_boxes[i:i + 1], stride)
+        #     cf = vis_cfs[i].item()
+        #     rgba = cmap(cf)
+        #     # ax.set_title(
+        #     #     f'{u:.2f}:[{jiou.item():.2f},{iou.item():.2f}]',
+        #     #     fontsize=10
+        #     # )
+        #     ax.text(0.01, -0.1,
+        #             f'{cf:.2f}',
+        #             fontsize=12,
+        #             linespacing=0.8,
+        #             backgroundcolor=rgba,
+        #             # bbox=dict(facecolor=[1, u.item(), u.item()]),
+        #             transform=ax.transAxes)
+        #     ax.text(0.3, -0.1,
+        #             f':[{jiou.item():.2f},{iou.item():.2f}]',
+        #             fontsize=12,
+        #             linespacing=0.8,
+        #             transform=ax.transAxes)
+        #     ax.axis('equal')
+        #     ax.axis('off')
+        #     sam = vis_pred_sam[i].cpu().numpy()
+        #     cur_conf = vis_pred_conf[i].cpu().numpy()
+        #     ax.scatter(sam[..., 0], sam[..., 1], c=cur_conf[..., 1], cmap='jet',
+        #                s=10, vmin=0, vmax=1)
+        #     ax = draw_box_plt(
+        #         vis_pred_boxes[i:i + 1, 1:], ax, color='k', linewidth_scale=2.0, linestyle='dashed'
+        #     )
+        #     sam = vis_gt_sam[i].cpu().numpy()
+        #     cur_conf = vis_gt_conf[i].cpu().numpy()
+        #     ax.scatter(sam[..., 0], sam[..., 1], c=cur_conf[..., 1], cmap='jet',
+        #                s=10, vmin=0, vmax=1)
+        #     ax = draw_box_plt(
+        #         vis_gt_boxes[i:i + 1, 1:], ax, color='k', linewidth_scale=2.0
+        #     )
+        # plt.subplots_adjust(bottom=1 / (rows * 1.4 + 1))
+        # cax = plt.axes([0.2, 0.01, 0.6, 0.03])
+        # cbar = plt.colorbar(mpl.cm.ScalarMappable(norm=norm, cmap=cmap),
+        #      cax=cax, orientation='horizontal', label='Evidence scale')
+        # plt.savefig(os.path.join(self.filename, 'img',
+        #                          '_'.join(out_dict['frame_id'][0]) + '_3.png'),
+        #                          bbox_inches='tight')
+        # plt.close()
+        # # print('d')
 
-        vis_cfs = pred_box_conf[mpred][malin]
-        sort_idx = torch.argsort(vis_cfs, descending=True)
-        vis_cfs = vis_cfs[sort_idx]
-        vis_ious = aligned_ious[mpred][malin][sort_idx]
-        vis_gt_boxes = vis_gt_boxes[sort_idx]
-        vis_pred_boxes = vis_pred_boxes[sort_idx]
-        vis_pred_sam = pred_box_sam[mpred][malin][sort_idx]
-        vis_gt_sam = aligned_gt_sam[mpred][malin][sort_idx]
-        vis_pred_conf = out_dict['pred_box_conf'][mpred][malin][sort_idx]
-        vis_gt_conf = aligned_gt_box_conf[mpred][malin][sort_idx]
-        from utils.vislib import draw_box_plt
-        for i in range(cols * rows):
-            ax = axes[i // cols, i % cols]
-            if i >= nbox:
-                ax.axis('off')
-                continue
-            # iou = vis_ious[i]
-            jiou, iou = self.jiou(conf, vis_pred_boxes[i:i + 1],
-                                    vis_gt_boxes[i:i + 1])
-            cf = vis_cfs[i]
-            # ax.set_title(
-            #     f'{u:.2f}:[{jiou.item():.2f},{iou.item():.2f}]',
-            #     fontsize=10
-            # )
-            ax.text(0.01, -0.1,
-                    f'{cf:.2f}',
-                    fontsize=12,
-                    linespacing=0.8,
-                    backgroundcolor=[1-cf.item(), 1, 1-cf.item()],
-                    # bbox=dict(facecolor=[1, u.item(), u.item()]),
-                    transform=ax.transAxes)
-            ax.text(0.3, -0.1,
-                    f':[{jiou.item():.2f},{iou.item():.2f}]',
-                    fontsize=12,
-                    linespacing=0.8,
-                    transform=ax.transAxes)
-            ax.axis('equal')
-            ax.axis('off')
-            sam = vis_pred_sam[i].cpu().numpy()
-            cur_conf = vis_pred_conf[i].cpu().numpy()
-            ax.scatter(sam[..., 0], sam[..., 1], c=cur_conf[..., 1], cmap='jet',
-                       s=10, vmin=0, vmax=1)
-            ax = draw_box_plt(
-                vis_pred_boxes[i:i + 1, 1:], ax, color='k', linewidth_scale=2.0, linestyle='dashed'
-            )
-            sam = vis_gt_sam[i].cpu().numpy()
-            cur_conf = vis_gt_conf[i].cpu().numpy()
-            ax.scatter(sam[..., 0], sam[..., 1], c=cur_conf[..., 1], cmap='jet',
-                       s=10, vmin=0, vmax=1)
-            ax = draw_box_plt(
-                vis_gt_boxes[i:i + 1, 1:], ax, color='k', linewidth_scale=2.0
-            )
-        plt.savefig(os.path.join(self.filename, 'img',
-                                 '_'.join(out_dict['frame_id'][0]) + '_3.png'),
-                                 bbox_inches='tight')
-        plt.close()
-        # print('d')
-
-    def get_box_unc_from_sam_unc(self, box_sam_unc, shrink=4):
+    def get_box_diag_unc_from_sam_unc(self, box_sam_unc, shrink=4):
         """
         Summarize one unc value for a box based on its sample unc.
         The final unc. is the min. from the mean unc of the 4 triangles of the box.
@@ -708,6 +742,15 @@ class MetricDynamicIou(MetricBevbase):
 
         return box_unc
 
+    def get_box_unc_from_sam_unc(self, box_sam_unc, shrink=4):
+        box_sam_unc_in_box = box_sam_unc[:, shrink:-shrink, shrink:-shrink]
+        nbox = len(box_sam_unc_in_box)
+        box_unc_mean = box_sam_unc_in_box.reshape(nbox, -1).mean(dim=1)
+        box_unc_sum = box_sam_unc_in_box.reshape(nbox, -1).sum(dim=1)
+        jiou = box_unc_sum / box_sam_unc.reshape(nbox, -1).sum(dim=1)
+
+        return torch.sqrt(box_unc_mean * jiou)
+
     def get_indices(self, box_samples, boxes):
         s = box_samples.shape[1]
         xy = torch.floor((box_samples + self.det_r) / self.vs).long()
@@ -718,12 +761,12 @@ class MetricDynamicIou(MetricBevbase):
         indices = torch.cat([batch_indices.view(1, -1), xy_indices], dim=0)
         return indices
 
-    def jiou(self, conf, pred_boxes, gt_boxes):
+    def jiou(self, conf, pred_boxes, gt_boxes, stride=1):
         if len(pred_boxes)==0 or len(gt_boxes)==0:
             return torch.tensor(0, device=conf.device), torch.tensor(0, device=conf.device)
         indices = torch.stack(torch.where(conf > 0), dim=1)
         ixy = indices.float()
-        ixy[:, 1:] = (ixy[:, 1:] + 0.5) * self.vs - self.det_r
+        ixy[:, 1:] = (ixy[:, 1:] + 0.5) * self.vs * stride - self.det_r
         ixyz = F.pad(ixy, (0, 1), 'constant', 0.0)
         # pred
         boxes = pred_boxes.clone()

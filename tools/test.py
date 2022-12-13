@@ -11,7 +11,7 @@ from config import load_yaml
 
 
 def test(cfgs, args):
-    # seed_everything(1234)
+    seed_everything(1234)
     device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
 
     # load checkpoint
@@ -35,8 +35,8 @@ def test(cfgs, args):
     i = 0
     if len(outfiles) > 0:
         for f in tqdm.tqdm(outfiles):
-            if i > 10:
-                break
+            # if i > 20:
+            #     break
             out_dict = torch.load(f)
             i += 1
             for metric in metrics_instances:

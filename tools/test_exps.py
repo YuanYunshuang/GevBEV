@@ -5,7 +5,7 @@ import argparse, os, shutil
 
 def try_test(args, exp):
     # try:
-    args.log_dir = f"/media/hdd/yuan/evibev/logs/{exp}"
+    args.log_dir = f"/media/hdd/yuan/evibev/ablation/{exp}"
     # if os.path.exists(os.path.join(args.log_dir, 'test', 'inf')):
     #     shutil.rmtree(os.path.join(args.log_dir, 'test', 'inf'))
     setattr(args, 'config', os.path.join(args.log_dir, 'config.yaml'))
@@ -22,6 +22,6 @@ if __name__ == "__main__":
     parser.add_argument("--vis-func", type=str) # , default="vis_semantic_unc"
     args = parser.parse_args()
 
-    try_test(args, 'evigausbev')
-    try_test(args, 'evibev')
-    try_test(args, 'bev')
+    try_test(args, 'evigausbev_p2')
+    try_test(args, 'evibev_p2')
+    try_test(args, 'bev_p2')

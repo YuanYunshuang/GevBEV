@@ -61,7 +61,7 @@ class BaseDataset(Dataset):
         Load the data dictionary of one sample.
         :param item: sample index
         :return: dict
-            - lidar: np.ndarray [N, 4], columns are (x, y, z, point_cls)
+            - lidar: np.ndarray [N, 5], columns are (x, y, z, intensity, point_cls)
             - lidar_idx: np.ndarray [N,], indices for lidar data from different cavs,
               in the case of mono view, this can be None or an array of zeros
             - boxes: np.ndarray [M, 7+c], first 7 columns must be
@@ -133,7 +133,8 @@ class BaseDataset(Dataset):
             points = points.reshape(-1, 2, 1) + np.random.normal(0, 3, (len(points), 2, 10))
             points = np.unique(points // res, axis=0) * res
             points = points.transpose(0, 2, 1).reshape(-1, 2)
-            points = points + np.random.normal(0, 1, (len(points), 2))
+            if not self.cfgs.get("discrete_bev_pts", False):
+                points = points + np.random.normal(0, 1, (len(points), 2))
 
             h, w = bevmap_static.shape
             pixels_per_meter = 1 / self.cfgs['bev_res']

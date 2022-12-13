@@ -1,0 +1,198 @@
+TRAIN:
+  wandb_account: opheliayuan
+  log_every: 2
+  max_epoch: 50
+  gpus: 1
+  log_every_n_steps: 10
+  check_val_every_n_epoch: 5
+  resume: true
+  optimizer:
+    lr: 0.001
+    weight_decay: 0.01
+    betas:
+    - 0.95
+    - 0.999
+    milestones:
+    - 20
+    - 45
+    gamma: 0.1
+DATASET:
+  name: OpV2V
+  path: /media/hdd/yuan/koko/data/nuScenes/prob_bev_labels
+  visualize: false
+  load_all: false
+  max_cav: 7
+  com_range: 45
+  bev_res: 0.2
+  load_camera: false
+  voxel:
+    features: x,y,z,d,c,s,i
+    coords: x,y,z
+    resolution:
+    - 0.2
+    - 0.2
+    - 0.2
+    xyz_idx:
+    - 0
+    - 1
+    - 2
+    voxel_feature_dim: 14
+  crop:
+    x:
+    - -50
+    - 50
+    'y':
+    - -50
+    - 50
+    z:
+    - -3
+    - 3
+  lidar_range:
+  - -50
+  - -50
+  - -3
+  - 50
+  - 50
+  - 3
+  free_space_h: -1.5
+  free_space_d: 6
+  free_space_step: 1.5
+  normalize_features:
+    dxy:
+    - 0
+    - 50
+    z:
+    - -3
+    - 3
+  augmentation: true
+  preprocessors:
+    args:
+      DimensionlessCoordinates:
+        voxel_size:
+        - 0.2
+        - 0.2
+        - 0.2
+    train:
+    - DimensionlessCoordinates
+    val:
+    - DimensionlessCoordinates
+    test:
+    - DimensionlessCoordinates
+  postprocessors:
+    args:
+      DistributionPostProcess:
+        det_r: 50
+        voxel_size:
+        - 0.2
+        - 0.2
+        - 0.2
+        vis_dir: /media/hdd/yuan/evibev/logs/opv2v/test/img
+        visualization: true
+        stride:
+          surface: 2
+          object: 1
+        distr_r:
+          surface: 2.0
+          object: 1.0
+    test:
+    - DistributionPostProcess
+  batch_size_train: 8
+  batch_size_val: 3
+  batch_size_test: 8
+  n_workers: 4
+  shuffle: true
+MODEL:
+  order:
+  - mink_unet
+  - m_compression
+  - h_detection
+  - h_distribution
+  mink_unet:
+    in_dim: 14
+    cache:
+    - p0
+    - p1
+    - p2
+    - p4
+    n_cls: 10
+    annealing_step: 50
+  m_compression:
+  - p1:
+      steps:
+      - 6
+      - 5
+      channels:
+      - 32
+      - 64
+      - 32
+  - p2:
+      steps:
+      - 3
+      - 5
+      channels:
+      - 64
+      - 64
+      - 64
+  - p4:
+      steps:
+      - 8
+      channels:
+      - 64
+      - 64
+  h_detection:
+  - s1:
+      det_r: 50
+      voxel_size: 0.2
+      stride: 4
+      in_dim: 64
+      box_dim:
+      - 4.41
+      - 1.98
+      - 1.64
+      box_z: 1.6
+      box_angles:
+      - 0
+      - 90
+      iou_match: 0.4
+      iou_unmatch: 0.2
+      sample_size: 512
+  - s2: []
+  h_bev:
+  - h_surface:
+      name: surface
+      voxel_size: 0.2
+      stride: 2
+      det_r: 50
+      in_dim: 64
+      distr_r: 2.0
+      var0:
+      - 0.1
+      - 0.1
+      annealing_step: 50
+  - h_object:
+      name: object
+      voxel_size: 0.2
+      stride: 1
+      det_r: 50
+      conv_kernels:
+      - 5
+      - 5
+      - 5
+      in_dim: 32
+      expand_coordinates: true
+      distr_r: 1.0
+      sampling: road
+      var0:
+      - 0.1
+      - 0.1
+      annealing_step: 50
+TEST:
+  vis_function: false
+  metrics:
+    MetricStaticIou: none
+    MetricDynamicIou:
+      r: 50
+      voxel_size:
+      - 0.2
+      - 0.2
+      - 0.2

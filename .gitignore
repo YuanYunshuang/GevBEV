@@ -1,4 +1,7 @@
 logs
+ablation
+nuscenes
+tools/outputs
 wandb
 *__pycache__*
 .idea

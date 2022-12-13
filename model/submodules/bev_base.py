@@ -230,13 +230,10 @@ class BEVBase(nn.Module):
     @torch.no_grad()
     def sample_tgt_pts(self, obs_mask, discrete=False):
         tgt_pts = self.centers.clone()
-        tgt_pts[:, 1:3] = tgt_pts[:, 1:3] + torch.randn_like(tgt_pts[:, 1:3])
+        if not discrete:
+            tgt_pts[:, 1:3] = tgt_pts[:, 1:3] + torch.randn_like(tgt_pts[:, 1:3])
         indices, mask = self.pts_to_masked_indices(tgt_pts)
         tgt_pts = tgt_pts[mask]
-        if discrete:
-            indices = indices.unique(dim=0)
-            tgt_pts = indices.clone()
-            tgt_pts[:, 1:] = (tgt_pts[:, 1:] - self.size) * self.res
         mask = obs_mask[indices[:, 0], indices[:, 1], indices[:, 2]]
         return tgt_pts[mask], indices[mask]
 
@@ -298,6 +295,6 @@ class BEVBase(nn.Module):
         #     )
         #     raise NotImplementedError
         tgt_label = tgt_label > 0
-        return tgt_pts[mask], tgt_label[mask], indices[mask]
+        return tgt_pts[mask], tgt_label[mask], indices[mask].T
 
 

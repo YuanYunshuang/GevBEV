@@ -1,11 +1,14 @@
 import logging, os
+from typing import Tuple, Any
+
 import torch, torch_scatter
 import torch.nn.functional as F
 import numpy as np
+from torch import Tensor
+
 from utils import pclib, box_utils, vislib
-from torch.distributions.multivariate_normal import _batch_mahalanobis
-from model.losses import edl
-from model.submodules.utils import meshgrid, metric2indices, draw_sample_prob, pad_l
+from ops.utils import points_in_boxes_gpu
+from model.submodules.utils import meshgrid, metric2indices, draw_sample_prob, pad_l, pad_r
 import matplotlib.pyplot as plt
 
 
@@ -105,28 +108,39 @@ class DistributionPostProcess(object):
             self.out['points'] = points
 
     def object(self, batch_dict):
-        pred_boxes = batch_dict['detection']['pred_boxes']
+        if 'detection' in batch_dict:
+            pred_boxes = batch_dict['detection']['pred_boxes']
+        else:
+            pred_boxes = batch_dict['target_boxes']
         gt_boxes = batch_dict['target_boxes']
         evidence = batch_dict['distr_object']['evidence']
         obs_mask = batch_dict['distr_object']['obs_mask']
-
-        conf, unc = self.evidence_to_conf_unc(evidence)
-
         centers = batch_dict['distr_object']['centers']
         reg = batch_dict['distr_object']['reg'].relu()
-        pred_sam_coor, pred_box_unc, pred_box_conf = \
-            self.get_sample_probs_metirc(pred_boxes, centers, reg)
-        gt_sam_coor, gt_box_unc, gt_box_conf = \
-            self.get_sample_probs_metirc(gt_boxes, centers, reg)
 
-        # pred_sam_coor, pred_box_unc, pred_box_conf = \
-        #     self.get_sample_probs_pixel(pred_boxes, unc, conf)
-        # gt_sam_coor, gt_box_unc, gt_box_conf = \
-        #     self.get_sample_probs_pixel(gt_boxes, unc, conf)
+        conf, unc = self.evidence_to_conf_unc(evidence)
+        if reg.shape[-1] == 6:
+            bev_conf_p1, bev_unc_p1 = self.get_bev_probs(
+                torch.cat([pred_boxes, gt_boxes], dim=0),
+                centers, reg, res=0.2
+            )
+
+            pred_sam_coor, pred_box_unc, pred_box_conf = \
+                self.get_sample_probs_metirc(pred_boxes, centers, reg)
+            gt_sam_coor, gt_box_unc, gt_box_conf = \
+                self.get_sample_probs_metirc(gt_boxes, centers, reg)
+        else:
+            pred_sam_coor, pred_box_unc, pred_box_conf = \
+                self.get_sample_probs_pixel(pred_boxes, unc, conf)
+            gt_sam_coor, gt_box_unc, gt_box_conf = \
+                self.get_sample_probs_pixel(gt_boxes, unc, conf)
+            bev_conf_p1, bev_unc_p1 = None, None
 
         self.out.update({
             'box_bev_unc': unc,
             'box_bev_conf': conf,
+            'box_bev_unc_p1': bev_unc_p1,
+            'box_bev_conf_p1': bev_conf_p1,
             'box_obs_mask': obs_mask,
             'pred_boxes': pred_boxes,
             'gt_boxes': gt_boxes,
@@ -223,7 +237,7 @@ class DistributionPostProcess(object):
 
         # box bev
         box_bev_conf = self.out['box_bev_conf'][0, :, :, 1].cpu().numpy().T
-        plt.imshow(box_bev_conf[::-1], cmap='hot', vmin=0, vmax=1)
+        plt.imshow(box_bev_conf[::-1], cmap='jet', vmin=0, vmax=1)
         plt.savefig(os.path.join(self.vis_dir, fn) + '_0.png')
         plt.close()
 
@@ -235,13 +249,14 @@ class DistributionPostProcess(object):
             conf = torch.div(alpha, S)
             K = evidence.shape[-1]
             unc = torch.div(K, S)
-            conf = torch.sqrt(conf * (1 - unc))
+            # conf = torch.sqrt(conf * (1 - unc))
             unc = unc.squeeze(dim=-1)
         else:
             # use entropy as uncertainty
             entropy = -evidence * torch.log2(evidence)
             unc = entropy.sum(dim=-1)
-            conf = torch.sqrt(evidence * (1 - unc.unsqueeze(-1)))
+            # conf = torch.sqrt(evidence * (1 - unc.unsqueeze(-1)))
+            conf = evidence
         return conf, unc
 
     def get_sample_probs_metirc(self, boxes, ctrs, ctrs_reg):
@@ -300,3 +315,33 @@ class DistributionPostProcess(object):
         sam_conf = torch.zeros_like(samples)
         sam_conf[mask] = conf[batch_indices, xy_masked[0], xy_masked[1]]
         return samples, sam_unc, sam_conf
+
+    def get_bev_probs(self,
+                      boxes: torch.Tensor,
+                      ctrs: torch.Tensor,
+                      reg: torch.Tensor,
+                      res: float = 0.2) -> Tuple:
+        # no reg for gaus
+        if reg.shape[-1] == 2:
+            return None, None
+        bs = ctrs[:, 0].max().long().item() + 1
+        pts = meshgrid(-self.det_r, self.det_r, 2, step=res) + res / 2
+        pts = torch.tile(pts.unsqueeze(0), (bs, 1, 1, 1))
+        pts = pad_l(pad_r(pts))
+        for b in range(bs):
+            pts[b, :, :, 0] = b
+        pts = pts.view(-1,  4).to(boxes.device)
+        boxes[:, 3] = 0
+        boxes[:, 4:6] *= 1.5
+        _, inds = points_in_boxes_gpu(pts, boxes, batch_size=bs)
+        pts = pts[inds >= 0, :3]
+        evis = draw_sample_prob(ctrs, reg, pts, res,
+                                self.distr_r['object'], self.det_r, bs,
+                                var0=[0.1, 0.1])
+        s = int(self.det_r / res)
+        indices = metric2indices(pts, res).T
+        indices[1:] = indices[1:] + s
+        evidence = torch.zeros((bs, s*2, s*2, 2), device=ctrs.device)
+        evidence[indices[0], indices[1], indices[2]] = evis
+        conf, unc = self.evidence_to_conf_unc(evidence)
+        return conf, unc
