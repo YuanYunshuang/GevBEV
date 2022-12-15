@@ -46,11 +46,7 @@ class HBEVBase(nn.Module):
         for k in self.convs:
             stride = int(k[1])
             stensor3d = batch_dict['compression'][k]
-            coor = fuse_batch_indices(stensor3d.C, batch_dict['num_cav'])
-            # todo: barely fuse voxels with batch indices might cause overlapped voxels even it has
-            #  a low chance, we temporarily average them.
-            coor, indices = coor[:, :3].unique(dim=0, return_inverse=True)
-            feat = torch_scatter.scatter_mean(stensor3d.F, indices, dim=0)
+            coor = stensor3d.C
             obs_mask = self.get_obs_mask(coor, stride)
 
             stensor2d = ME.SparseTensor(
