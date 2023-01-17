@@ -9,7 +9,8 @@ def get_dataloader(cfgs, mode='train'):
     assert hasattr(module, f'{name}Dataset'), "Invalid dataset."
     module_class = getattr(module, f'{name}Dataset')
     dataset = module_class(cfgs, mode)
-    shuffle = False if mode=='test' else cfgs.get('shuffle', None)
+    # shuffle = False if mode=='test' else cfgs.get('shuffle', None)
+    shuffle = True
     dataloader = torch.utils.data.DataLoader(dataset,
                                              batch_size=cfgs[f'batch_size_{mode}'],
                                              sampler=None, num_workers=cfgs['n_workers'],

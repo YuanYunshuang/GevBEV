@@ -7,6 +7,12 @@ from model.submodules.utils import draw_sample_prob, \
     weighted_mahalanobis_dists
 from model.submodules.bev_base import BEVBase, HBEVBase
 from model.losses.edl import edl_mse_loss
+import matplotlib.pyplot as plt
+from PIL import Image
+import numpy as np
+import matplotlib.cm as cm
+from utils.vislib import draw_points_boxes_plt
+cm_hot = cm.get_cmap('hot')
 
 
 class EviGausBEV(BEVBase):
@@ -21,8 +27,8 @@ class EviGausBEV(BEVBase):
     def get_reg_layer(self, in_dim):
         return linear_last(in_dim, 32, 6, bias=True)
 
-    def draw_distribution(self, reg):
-        reg = reg.relu()
+    def draw_distribution(self, batch_dict):
+        reg = self.out['reg'].relu()
         reg_evi = reg[:, :2]
         reg_var = reg[:, 2:].view(-1, 2, 2)
         ctrs = self.centers[:, :3]  # N 2
@@ -30,9 +36,25 @@ class EviGausBEV(BEVBase):
         dists = torch.zeros_like(ctrs[:, 1:].view(-1, 1, 2)) + self.nbrs
         probs_weighted = weighted_mahalanobis_dists(reg_evi, reg_var, dists, self.var0)
         evidence, obs_mask = self.get_evidence_map(probs_weighted, ctrs)
+        unc, conf = self.evidence_to_conf_unc(evidence)
 
-        self.out['evidence'] = evidence
-        return evidence
+        # grid_size = int(self.det_r / self.res * 2)
+        # s = batch_dict['bevmap_static'].shape[2] // grid_size
+        # cared_mask = batch_dict['bevmap_static'][:, ::s, ::s].bool()
+        cared_mask = batch_dict['distr_conv_out'][f'p{self.stride}']['obs_mask']
+        cared_mask = torch.ones_like(cared_mask).bool()
+        evidence_cpm, Nall, Nsel = self.get_cpm_map(
+            batch_dict['num_cav'], unc, conf, cared_mask, batch_dict
+        )
+
+        ego_idx = [sum(batch_dict['num_cav'][:i]) for i in range(len(batch_dict['num_cav']))]
+        evidence_ego = evidence[ego_idx]
+        evidence_fused = evidence_ego + evidence_cpm
+
+        self.out['evidence'] = evidence_fused
+        self.out['Nall'] = Nall
+        self.out['Nsel'] = Nsel
+        return evidence_fused
 
     def get_evidence_map(self, probs_weighted, coor):
         voxel_new = coor[:, 1:].view(-1, 1, 2) + self.nbrs
@@ -55,6 +77,120 @@ class EviGausBEV(BEVBase):
         obs_mask[obs] = 1
         obs_mask = obs_mask.view(batch_size, size * 2, size * 2).bool()
         return evidence, obs_mask
+
+    def get_cpm_map(self, num_cav, unc, evidence, cared_mask, batch_dict=None):
+        evi_share = []
+        n_share_all = 0
+        n_share_selected = 0
+        for i, c in enumerate(num_cav):
+            if c == 1:
+                evi_share.append(torch.zeros_like(evidence[0]))
+                continue
+            idx_start = sum(num_cav[:i])
+            cur_unc = unc[idx_start:idx_start + c]
+
+            if batch_dict is not None:
+                ego_mask = batch_dict['in_data'].C[:, 0] == idx_start
+                coop_mask = batch_dict['in_data'].C[:, 0] == idx_start + 1
+                ego_pts = batch_dict['xyz'][ego_mask].cpu().numpy()
+                coop_pts = batch_dict['xyz'][coop_mask].cpu().numpy()
+                ax = draw_points_boxes_plt(pc_range=50, points=ego_pts, points_c='r',
+                                           return_ax=True)
+                draw_points_boxes_plt(pc_range=50, points=coop_pts, points_c='g', ax=ax)
+
+            img = cm_hot(1 - cur_unc[0].cpu().numpy())[..., :3] * 255
+            Image.fromarray(img.astype(np.uint8)).save(
+                '/media/hdd/yuan/evibev_exp/unc0.png'
+            )
+            img = cm_hot(1 - cur_unc[1].cpu().numpy())[..., :3] * 255
+            Image.fromarray(img.astype(np.uint8)).save(
+                '/media/hdd/yuan/evibev_exp/unc1.png'
+            )
+            # plt.imshow(1 - cur_unc[0].cpu().numpy(), cmap='hot')
+            # plt.savefig('/media/hdd/yuan/evibev_exp/unc0.png')
+            # plt.close()
+            # plt.imshow(1 - cur_unc[1].cpu().numpy(), cmap='hot')
+            # plt.savefig('/media/hdd/yuan/evibev_exp/unc1.png')
+            # plt.close()
+
+            cur_evi = evidence[idx_start:idx_start + c]
+            # share all info on potential road surface
+            resp_all = torch.logical_and(cur_unc[1:] < 1.0, cared_mask[i].unsqueeze(0))
+            n_share_all = n_share_all + resp_all.sum()
+            # ego mask for requesting the CPM from coop. CAV
+            req_mask = torch.logical_and(cur_unc[0] > self.cpm_thr, cared_mask[i])
+
+            # coop mask for responding
+            rsp_mask = torch.logical_and(cur_unc[1:] < 1.0, req_mask.unsqueeze(0))
+
+            img = torch.zeros_like(rsp_mask[[0, 0, 0]])
+            img[0] = req_mask
+            Image.fromarray((img.permute(1, 2, 0).int() * 255).cpu().numpy().astype(np.uint8)).save(
+                '/media/hdd/yuan/evibev_exp/req.png'
+            )
+            img = torch.zeros_like(rsp_mask[[0, 0, 0]])
+            img[1] = rsp_mask[0]
+            Image.fromarray((img.permute(1, 2, 0).int() * 255).cpu().numpy().astype(np.uint8)).save(
+                '/media/hdd/yuan/evibev_exp/rsp.png'
+            )
+
+            # share selected
+            n_share_selected = n_share_selected + rsp_mask.sum()
+            # get conf map of coop. CAV
+            evi_coop = cur_evi[1:].clone()
+            evi_coop[torch.logical_not(rsp_mask)] = 0
+            evi_share.append(evi_coop.sum(dim=0))
+        evi_share = torch.stack(evi_share, dim=0)
+        n_share_all = n_share_all / len(num_cav)
+        n_share_selected = n_share_selected / len(num_cav)
+        return evi_share, n_share_all.item(), n_share_selected.item()
+
+    def get_cpms(self, num_cav, unc, centers, reg, road_bev, thr=0.5):
+        centers_share = []
+        reg_share = []
+        for i, c in enumerate(num_cav):
+            if c == 1:
+                continue
+            idx_start = sum(num_cav[:i])
+            cur_unc = unc[idx_start:idx_start + c]
+            # ego mask for requesting the CPM from coop. CAV
+            req_mask = torch.logical_and(cur_unc[0] > thr, road_bev[i])
+            # coop mask for responding
+            rsp_mask = torch.logical_and(cur_unc[1:] < thr, req_mask.unsqueeze(0))
+            # get the center points of coop. CAV
+            mask = torch.logical_and(centers[:, 0] >= idx_start,
+                                     centers[:, 0] < idx_start + c)
+            cur_ctrs = centers[mask]
+            cur_reg = reg[mask]
+            cur_ctrs[:, 0] = cur_ctrs[:, 0] - idx_start
+            cur_ctrs[:, 1:] = cur_ctrs[:, 1:] - self.voxel_size / 2
+            res = self.voxel_size * self.stride
+            grid_size = int(self.det_r / res * 2)
+            indices = metric2indices(cur_ctrs, res)
+            indices[:, 1:] = indices[:, 1:] + grid_size / 2
+            mask = torch.logical_and(indices[:, 1:] >= 0, indices[:, 1:] < grid_size).all(dim=1)
+            indices = indices[mask]
+            cur_ctrs = cur_ctrs[mask]
+            cur_reg = cur_reg[mask]
+            ctr_mask = rsp_mask[indices[:, 0] - 1, indices[:, 1], indices[:, 2]]
+            cur_ctrs = cur_ctrs[ctr_mask]
+            cur_ctrs[:, 0] = i
+            centers_share.append(cur_ctrs)
+            reg_share.append(cur_reg[ctr_mask])
+        centers_share = torch.cat(centers_share, dim=0)
+        reg_share = torch.cat(reg_share, dim=0)
+
+        return centers_share, reg_share
+
+    def evidence_to_conf_unc(self, evidence):
+        alpha = evidence + 1
+        S = torch.sum(alpha, dim=-1, keepdim=True)
+        conf = torch.div(alpha, S)
+        K = evidence.shape[-1]
+        unc = torch.div(K, S)
+        # conf = torch.sqrt(conf * (1 - unc))
+        unc = unc.squeeze(dim=-1)
+        return unc, conf
 
     def loss(self, batch_dict):
         tgt_pts, tgt_labels, indices = self.get_tgt(batch_dict)

@@ -279,6 +279,11 @@ class MetricBevbase(Metric):
             'unc': [],
             'gt': []
         }
+        self.cpm = {
+            'all': 0,
+            'sel': 0,
+            'cnt': 0
+        }
 
         self.plot_data = {}
         self.result_dict = {}
@@ -314,6 +319,20 @@ class MetricBevbase(Metric):
             mu = torch.logical_or(pos_mask, gt).sum()
             ious.append(mi / mu)
         self.result['iou_obs'].append(torch.stack(ious, dim=0))
+
+    def cpm_cnt(self, Nall, Nsel):
+        self.cpm['all'] = self.update_mean(self.cpm['all'], self.cpm['cnt'], Nall)
+        self.cpm['sel'] = self.update_mean(self.cpm['sel'], self.cpm['cnt'], Nsel)
+        self.cpm['cnt'] += 1
+
+    def update_mean(self, m, cnt, x):
+        """
+        :param m: mean
+        :param cnt: count of old entries
+        :param x: current new entry
+        :return: updated mean
+        """
+        return m + (x - m) / (cnt + 1)
 
     def add_inter_data(self, out_dict):
         raise NotImplementedError
@@ -420,6 +439,8 @@ class MetricBevbase(Metric):
         # self.conf_Q(f"{self.filename_prefix}_conf_q.png")
 
         self.result_dict = {
+            "cpm_all_cnt_mean": self.cpm['all'],
+            "cpm_all_cnt_sel": self.cpm['sel'],
             "thr": self.thrs,
             "iou all": ious_all,
             "iou obs": ious_obs,
@@ -457,21 +478,22 @@ class MetricStaticIou(MetricBevbase):
         self.stride = self.cfg['stride']
 
     def add_samples(self, out_dict):
-        out_dict['road_bev'] = out_dict['road_bev'].bool().int()
+        out_dict['cared_mask'] = out_dict['cared_mask'].bool().int()
         self.iou_all(out_dict['road_confidence'],
                      out_dict['road_uncertainty'],
-                     out_dict['road_bev'])
+                     out_dict['cared_mask'])
         self.iou_obs(out_dict['road_confidence'],
                      out_dict['road_uncertainty'],
-                     out_dict['road_bev'],
+                     out_dict['cared_mask'],
                      out_dict['road_obs_mask'])
         self.add_inter_data(out_dict)
+        self.cpm_cnt(out_dict['road_Nall'], out_dict['road_Nsel'])
 
     def add_inter_data(self, out_dict):
         obs_mask = out_dict['road_obs_mask']
         self.inter_result['conf'].append(out_dict['road_confidence'][obs_mask])
         self.inter_result['unc'].append(out_dict['road_uncertainty'][obs_mask])
-        self.inter_result['gt'].append(out_dict['road_bev'][obs_mask])
+        self.inter_result['gt'].append(out_dict['cared_mask'][obs_mask])
 
 
 class MetricDynamicIou(MetricBevbase):
@@ -505,7 +527,8 @@ class MetricDynamicIou(MetricBevbase):
                      gt_mask_all,
                      out_dict['box_obs_mask'])
         self.add_inter_data(out_dict)
-        self.add_box_ious(out_dict)
+        # self.add_box_ious(out_dict)
+        self.cpm_cnt(out_dict['box_Nall'], out_dict['box_Nsel'])
 
     def remove_ego_box(self, out_dict):
         mask = torch.norm(out_dict[f'gt_boxes'][:, 1:3], dim=-1) > 1
@@ -801,21 +824,22 @@ class MetricDynamicIou(MetricBevbase):
         return jiou, iou
 
     def summary_hook(self):
+        pass
 
-        jiou_oa = torch.stack(self.result['jiou'], dim=0).mean() * 100
-        iou_oa = torch.stack(self.result['iou'], dim=0).mean() * 100
-
-        jious_boxwise = torch.stack(self.result['jiou_boxwise'], dim=0)
-        jious_boxwise = (jious_boxwise.sum(dim=0) / jious_boxwise.bool().sum(dim=0)) * 100
-        ious_boxwise= torch.stack(self.result['iou_boxwise'], dim=0)
-        ious_boxwise = (ious_boxwise.sum(dim=0) / ious_boxwise.bool().sum(dim=0)) * 100
-
-        self.result_dict.update({
-            'jiou_boxwise': jious_boxwise,
-            'iou boxewise': ious_boxwise,
-            'jiou overall': jiou_oa.item(),
-            'iou overall': iou_oa.item()
-        })
+        # jiou_oa = torch.stack(self.result['jiou'], dim=0).mean() * 100
+        # iou_oa = torch.stack(self.result['iou'], dim=0).mean() * 100
+        #
+        # jious_boxwise = torch.stack(self.result['jiou_boxwise'], dim=0)
+        # jious_boxwise = (jious_boxwise.sum(dim=0) / jious_boxwise.bool().sum(dim=0)) * 100
+        # ious_boxwise= torch.stack(self.result['iou_boxwise'], dim=0)
+        # ious_boxwise = (ious_boxwise.sum(dim=0) / ious_boxwise.bool().sum(dim=0)) * 100
+        #
+        # self.result_dict.update({
+        #     'jiou_boxwise': jious_boxwise,
+        #     'iou boxewise': ious_boxwise,
+        #     'jiou overall': jiou_oa.item(),
+        #     'iou overall': iou_oa.item()
+        # })
 
 
 

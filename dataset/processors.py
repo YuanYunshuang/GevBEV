@@ -86,18 +86,20 @@ class DistributionPostProcess(object):
         grid_size = int(self.det_r / res * 2)
         evidence = batch_dict['distr_surface']['evidence']
         obs_mask = batch_dict['distr_surface']['obs_mask']
-        
-        conf, unc = self.evidence_to_conf_unc(evidence)
-        
+
         s = batch_dict['bevmap_static'].shape[2] // grid_size
         road_bev = batch_dict['bevmap_static'][:, ::s, ::s].bool()
-        
+
+        conf, unc = self.evidence_to_conf_unc(evidence)
+
         self.out = {
             'frame_id': batch_dict['frame_id'],
             'road_confidence': conf,
-            'road_bev': road_bev,
+            'cared_mask': road_bev,
             'road_uncertainty': unc.squeeze(),
-            'road_obs_mask': obs_mask
+            'road_obs_mask': obs_mask,
+            'road_Nall': batch_dict['distr_surface']['Nall'],
+            'road_Nsel': batch_dict['distr_surface']['Nsel']
         }
 
         if self.vis:
@@ -115,26 +117,14 @@ class DistributionPostProcess(object):
         gt_boxes = batch_dict['target_boxes']
         evidence = batch_dict['distr_object']['evidence']
         obs_mask = batch_dict['distr_object']['obs_mask']
-        centers = batch_dict['distr_object']['centers']
-        reg = batch_dict['distr_object']['reg'].relu()
 
         conf, unc = self.evidence_to_conf_unc(evidence)
-        if reg.shape[-1] == 6:
-            bev_conf_p1, bev_unc_p1 = self.get_bev_probs(
-                torch.cat([pred_boxes, gt_boxes], dim=0),
-                centers, reg, res=0.2
-            )
 
-            pred_sam_coor, pred_box_unc, pred_box_conf = \
-                self.get_sample_probs_metirc(pred_boxes, centers, reg)
-            gt_sam_coor, gt_box_unc, gt_box_conf = \
-                self.get_sample_probs_metirc(gt_boxes, centers, reg)
-        else:
-            pred_sam_coor, pred_box_unc, pred_box_conf = \
-                self.get_sample_probs_pixel(pred_boxes, unc, conf)
-            gt_sam_coor, gt_box_unc, gt_box_conf = \
-                self.get_sample_probs_pixel(gt_boxes, unc, conf)
-            bev_conf_p1, bev_unc_p1 = None, None
+        pred_sam_coor, pred_box_unc, pred_box_conf = \
+            self.get_sample_probs_pixel(pred_boxes, unc, conf)
+        gt_sam_coor, gt_box_unc, gt_box_conf = \
+            self.get_sample_probs_pixel(gt_boxes, unc, conf)
+        bev_conf_p1, bev_unc_p1 = None, None
 
         self.out.update({
             'box_bev_unc': unc,
@@ -149,7 +139,9 @@ class DistributionPostProcess(object):
             'pred_box_conf': pred_box_conf,
             'gt_box_samples': gt_sam_coor,
             'gt_box_unc': gt_box_unc,
-            'gt_box_conf': gt_box_conf
+            'gt_box_conf': gt_box_conf,
+            'box_Nall': batch_dict['distr_object']['Nall'],
+            'box_Nsel': batch_dict['distr_object']['Nsel']
         })
     
     def visualization(self):
@@ -159,7 +151,7 @@ class DistributionPostProcess(object):
         res = self.voxel_size * self.stride['surface']
         grid_size = int(self.det_r / res * 2)
         points = out_dict.pop('points').cpu().numpy()
-        road_bev = out_dict['road_bev'][0].cpu().numpy()
+        road_bev = out_dict['cared_mask'][0].cpu().numpy()
         confs_np = out_dict['road_confidence'][0].cpu().numpy()
         obs_msk = out_dict['road_obs_mask'][0].cpu().numpy()
         unc = out_dict['road_uncertainty'][0].cpu().numpy()

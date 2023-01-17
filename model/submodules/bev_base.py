@@ -46,12 +46,16 @@ class HBEVBase(nn.Module):
         for k in self.convs:
             stride = int(k[1])
             stensor3d = batch_dict['compression'][k]
-            coor = stensor3d.C
+            coor = fuse_batch_indices(stensor3d.C, batch_dict['num_cav'])
+            # todo: barely fuse voxels with batch indices might cause overlapped voxels even it has
+            #  a low chance, we temporarily average them.
+            coor, indices = coor[:, :3].unique(dim=0, return_inverse=True)
+            # feat = torch_scatter.scatter_mean(stensor3d.F, indices, dim=0)
             obs_mask = self.get_obs_mask(coor, stride)
 
             stensor2d = ME.SparseTensor(
-                coordinates=coor.contiguous(),
-                features=feat,
+                coordinates=stensor3d.C[:, :3].contiguous(),
+                features=stensor3d.F,
                 tensor_stride=[stride] * 2
             )
             stensor2d = getattr(self, f'convs_{k}')(stensor2d)
@@ -128,7 +132,7 @@ class BEVBase(nn.Module):
     def get_reg_layer(self, in_dim):
         raise NotImplementedError
 
-    def draw_distribution(self, reg):
+    def draw_distribution(self, batch_dict):
         raise NotImplementedError
 
     def loss(self, batch_dict):
@@ -150,12 +154,12 @@ class BEVBase(nn.Module):
         }
 
         if not self.training:
-            evidence = self.draw_distribution(reg)
+            evidence = self.draw_distribution(batch_dict)
             batch_dict[f'distr_{self.name}'] = {
                 'evidence': evidence,
                 'obs_mask': conv_out['obs_mask'],
-                'centers': self.centers,
-                'reg': reg
+                'Nall': self.out['Nall'],
+                'Nsel': self.out['Nsel']
             }
 
     def down_sample(self, coor, feat):

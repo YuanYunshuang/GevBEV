@@ -229,14 +229,14 @@ def pad_l(tensor, value=0):
     return torch.cat([tensor_pad, tensor], dim=-1)
 
 
-def fuse_batch_indices(coords, num_cav):
+def fuse_batch_indices(coords_in, num_cav):
     """
     Fusing voxels of CAVs from the same frame
     :param stensor: ME sparse tensor
     :param num_cav: list of number of CAVs for each frame
     :return: fused coordinates and features of stensor
     """
-
+    coords = coords_in.clone()
     for i, c in enumerate(num_cav):
         idx_start = sum(num_cav[:i])
         mask = torch.logical_and(

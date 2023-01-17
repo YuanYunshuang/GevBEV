@@ -10,7 +10,7 @@ from utils.train_utils import *
 from config import load_yaml
 
 
-def test(cfgs, args):
+def test(cfgs, args, n=0):
     seed_everything(1234)
     device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
 
@@ -18,18 +18,18 @@ def test(cfgs, args):
     log_dir = cfgs['TRAIN']['log_dir']
 
     # set paths
-    out_img_dir = os.path.join(log_dir, 'test', 'img')
-    out_inf_dir = os.path.join(log_dir, 'test', 'inf')
+    out_img_dir = os.path.join(log_dir, f'test{n}', 'img')
+    out_inf_dir = os.path.join(log_dir, f'test{n}', 'inf')
     misc.ensure_dir(out_img_dir)
     misc.ensure_dir(out_inf_dir)
-    logger = open(os.path.join(log_dir, 'test', 'result.txt'), mode='w')
+    logger = open(os.path.join(log_dir, f'test{n}', 'result.txt'), mode='w')
 
     metrics_instances = []
     for metric_name in cfgs['TEST']['metrics']:
         metric_cls = getattr(metrics, metric_name, None)
         if metric_cls is not None:
             metrics_instances.append(metric_cls(cfgs['TEST']['metrics'][metric_name],
-                                                log_dir, logger))
+                                                log_dir, logger, name=f'test{n}'))
 
     outfiles = glob.glob(os.path.join(out_inf_dir, '*.pth'))
     i = 0
@@ -71,7 +71,7 @@ def test(cfgs, args):
             # loss_dict = model.loss(batch_data)
             # result.append(loss_dict)
             out_dict = post_processor(batch_data)
-            torch.save(out_dict, os.path.join(log_dir, 'test', 'inf', f"{batch_idx}.pth"))
+            # torch.save(out_dict, os.path.join(log_dir, f'test{n}', 'inf', f"{batch_idx}.pth"))
             for metric in metrics_instances:
                 metric.add_samples(out_dict)
 
