@@ -13,6 +13,7 @@ import numpy as np
 import matplotlib.cm as cm
 from utils.vislib import draw_points_boxes_plt
 cm_hot = cm.get_cmap('hot')
+from PIL import Image
 
 
 class EviGausBEV(BEVBase):
@@ -98,14 +99,14 @@ class EviGausBEV(BEVBase):
                                            return_ax=True)
                 draw_points_boxes_plt(pc_range=50, points=coop_pts, points_c='g', ax=ax)
 
-            img = cm_hot(1 - cur_unc[0].cpu().numpy())[..., :3] * 255
-            Image.fromarray(img.astype(np.uint8)).save(
-                '/media/hdd/yuan/evibev_exp/unc0.png'
-            )
-            img = cm_hot(1 - cur_unc[1].cpu().numpy())[..., :3] * 255
-            Image.fromarray(img.astype(np.uint8)).save(
-                '/media/hdd/yuan/evibev_exp/unc1.png'
-            )
+            # img = cm_hot(1 - cur_unc[0].cpu().numpy())[..., :3] * 255
+            # Image.fromarray(img.astype(np.uint8)).save(
+            #     '/media/hdd/yuan/evibev_exp/unc0.png'
+            # )
+            # img = cm_hot(1 - cur_unc[1].cpu().numpy())[..., :3] * 255
+            # Image.fromarray(img.astype(np.uint8)).save(
+            #     '/media/hdd/yuan/evibev_exp/unc1.png'
+            # )
             # plt.imshow(1 - cur_unc[0].cpu().numpy(), cmap='hot')
             # plt.savefig('/media/hdd/yuan/evibev_exp/unc0.png')
             # plt.close()
@@ -123,16 +124,16 @@ class EviGausBEV(BEVBase):
             # coop mask for responding
             rsp_mask = torch.logical_and(cur_unc[1:] < 1.0, req_mask.unsqueeze(0))
 
-            img = torch.zeros_like(rsp_mask[[0, 0, 0]])
-            img[0] = req_mask
-            Image.fromarray((img.permute(1, 2, 0).int() * 255).cpu().numpy().astype(np.uint8)).save(
-                '/media/hdd/yuan/evibev_exp/req.png'
-            )
-            img = torch.zeros_like(rsp_mask[[0, 0, 0]])
-            img[1] = rsp_mask[0]
-            Image.fromarray((img.permute(1, 2, 0).int() * 255).cpu().numpy().astype(np.uint8)).save(
-                '/media/hdd/yuan/evibev_exp/rsp.png'
-            )
+            # img = torch.zeros_like(rsp_mask[[0, 0, 0]])
+            # img[0] = req_mask
+            # Image.fromarray((img.permute(1, 2, 0).int() * 255).cpu().numpy().astype(np.uint8)).save(
+            #     '/media/hdd/yuan/evibev_exp/req.png'
+            # )
+            # img = torch.zeros_like(rsp_mask[[0, 0, 0]])
+            # img[1] = rsp_mask[0]
+            # Image.fromarray((img.permute(1, 2, 0).int() * 255).cpu().numpy().astype(np.uint8)).save(
+            #     '/media/hdd/yuan/evibev_exp/rsp.png'
+            # )
 
             # share selected
             n_share_selected = n_share_selected + rsp_mask.sum()
@@ -140,7 +141,9 @@ class EviGausBEV(BEVBase):
             evi_coop = cur_evi[1:].clone()
             evi_coop[torch.logical_not(rsp_mask)] = 0
             evi_share.append(evi_coop.sum(dim=0))
+            
         evi_share = torch.stack(evi_share, dim=0)
+
         n_share_all = n_share_all / len(num_cav)
         n_share_selected = n_share_selected / len(num_cav)
         return evi_share, n_share_all.item(), n_share_selected.item()
