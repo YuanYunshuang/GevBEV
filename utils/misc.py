@@ -1,6 +1,6 @@
 import os
-import gin
 import logging
+import time
 
 import numpy as np
 import torch
@@ -29,14 +29,6 @@ def setup_logger(exp_name, debug):
         datefmt="[%X]",
     )
     logging.basicConfig(**logger_config)
-
-
-@gin.configurable
-def logged_hparams(keys):
-    C = dict()
-    for k in keys:
-        C[k] = gin.query_parameter(f"{k}")
-    return C
 
 
 def load_from_pl_state_dict(model, pl_state_dict):
@@ -95,3 +87,31 @@ def pad_list_to_array_torch(data):
     for b in range(B):
         out[b, :cnt[b]] = data[b]
     return out
+
+
+def print_exec_time(func):
+    """decorate function for evaluating runtime of a normal function"""
+    runtimes = {}
+    def wrapper(*args, **kwargs):
+        start_time = time.time()
+        result = func(*args, **kwargs)
+        end_time = time.time()
+        runtime = end_time - start_time
+        print(f"Runtime of {func.__name__:30s}: {runtime * 1000:03.6f} ms")
+        if func.__name__ not in runtimes:
+            runtimes[func.__name__] = [runtime]
+        else:
+            runtimes[func.__name__] += [runtime]
+        return result
+
+    def get_mean_runtime():
+        if runtimes:
+            mean_runtime = sum(runtimes[func.__name__]) / len(runtimes[func.__name__])
+            ss = f"Mean runtime of {func.__name__:30s}: {mean_runtime * 1000:03.6f} ms"
+            print("=" * len(ss))
+            print(ss)
+        else:
+            print("No runtimes recorded.")
+
+    wrapper.get_mean_runtime = get_mean_runtime
+    return wrapper

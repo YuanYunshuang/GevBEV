@@ -12,12 +12,17 @@ from utils.train_utils import *
 from utils.logger import LogMeter
 from config import load_yaml, save_yaml
 
+logging.DEBUG = True
+import torch.multiprocessing as mp
 
-def train(cfgs):
+
+def train(cfgs, args):
+    if args.cuda_loader:
+        mp.set_start_method('spawn')
     seed_everything(1234)
     device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
 
-    train_dataloader = get_dataloader(cfgs['DATASET'])
+    train_dataloader = get_dataloader(cfgs['DATASET'], mode='train', use_cuda=args.cuda_loader)
     model = get_model(cfgs['MODEL']).to(device)
     optimizer, lr_scheduler = build_optimizer(model, cfgs['TRAIN']['optimizer'])
 
@@ -57,6 +62,12 @@ def train(cfgs):
             lr_scheduler.step()
             # train_dataloader.dataset.shuffle_samples()
 
+        # save final result
+        torch.save({
+            'model_state_dict': model.state_dict(),
+            'optimizer_state_dict': optimizer.state_dict()
+        }, os.path.join(logger.log_path, f'epoch{epoch}.pth'))
+
 
 def train_one_epoch(train_dataloader, model, optimizer, lr_scheduler, epoch, logger=None):
     iteration = 1
@@ -95,20 +106,22 @@ def train_one_epoch(train_dataloader, model, optimizer, lr_scheduler, epoch, log
                 'loss': loss_dict['total'],
             }, os.path.join(logger.log_path, f'last.pth'))
 
-    torch.save({
-        'epoch': epoch,
-        'iteration': iteration,
-        'model_state_dict': model.state_dict(),
-        'optimizer_state_dict': optimizer.state_dict(),
-        'loss': loss_dict['total'],
-    }, os.path.join(logger.log_path, f'epoch{epoch}.pth'))
+    # if epoch % 10 == 0:
+    #     torch.save({
+    #         'epoch': epoch,
+    #         'iteration': iteration,
+    #         'model_state_dict': model.state_dict(),
+    #         'optimizer_state_dict': optimizer.state_dict(),
+    #         'loss': loss_dict['total'],
+    #     }, os.path.join(logger.log_path, f'epoch{epoch}.pth'))
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", type=str, default="./config/config.yaml")
+    parser.add_argument("--cuda_loader", action="store_true")
     parser.add_argument("--resume", action="store_true")
-    parser.add_argument("--log_dir", type=str, default="../logs")
+    parser.add_argument("--log_dir", type=str, default="./logs")
     parser.add_argument("--run_name", type=str, default="default")
     parser.add_argument("--seed", type=int, default=1234)
     parser.add_argument("--debug", action="store_true")
@@ -121,4 +134,4 @@ if __name__ == "__main__":
     cfgs = load_yaml(args)
     setup_logger(args.run_name, args.debug)
 
-    train(cfgs)
+    train(cfgs, args)

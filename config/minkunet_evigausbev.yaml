@@ -106,29 +106,29 @@ MODEL:
         sample_size: 512
     - s2: []
   h_bev:
-    - h_surface:
-        name: surface
-        voxel_size: *vs
-        stride: 2
-        det_r: *det_r
-        #      conv_kernels: [3, 3, 3] # receiptive field: 1.2m
-        in_dim: 64
-        #      expand_coordinates: False
-        distr_r: 2.0 # in meter
-        var0: [ 0.1, 0.1 ]
-        annealing_step: *ann_step
-    - h_object:
-        name: object
-        voxel_size: *vs
-        stride: 1
-        det_r: *det_r
-        conv_kernels: [ 5, 5, 5 ] # receiptive field: 1.2m
-        in_dim: 32
-        expand_coordinates: True
-        distr_r: 1.0 # in meter
-        sampling: road # sample pixels with boxes or road
-        var0: [ 0.1, 0.1 ]
-        annealing_step: *ann_step
+    h_surface:
+      name: surface
+      voxel_size: *vs
+      stride: 2
+      det_r: *det_r
+      #      conv_kernels: [3, 3, 3] # receiptive field: 1.2m
+      in_dim: 64
+      #      expand_coordinates: False
+      distr_r: 2.0 # in meter
+      var0: [ 0.1, 0.1 ]
+      annealing_step: *ann_step
+    h_object:
+      name: object
+      voxel_size: *vs
+      stride: 1
+      det_r: *det_r
+      conv_kernels: [ 5, 5, 5 ] # receiptive field: 1.2m
+      in_dim: 32
+      expand_coordinates: True
+      distr_r: 1.0 # in meter
+      sampling: road # sample pixels with boxes or road
+      var0: [ 0.1, 0.1 ]
+      annealing_step: *ann_step
 
 
 

@@ -16,14 +16,16 @@ class EviBEV(BEVBase):
     def get_reg_layer(self, in_dim):
         return linear_last(in_dim, 32, 2, bias=True)
 
-    def draw_distribution(self, reg):
+    def draw_distribution(self, batch_dict):
+        reg = self.out['reg']
         reg_evi = reg.relu()
         ctrs = self.centers[:, :3]  # N 2
         batch_size = ctrs[:, 0].max().int() + 1
-        evidence = torch.zeros((batch_size, self.size * 2, self.size * 2, 2),
+        evidence = torch.zeros((batch_size, self.size_x, self.size_y, 2),
                                device=reg_evi.device)
         inds = metric2indices(ctrs, self.res).T
-        inds[1:] += self.size
+        inds[1] -= self.offset_sz_x
+        inds[2] -= self.offset_sz_y
         # obs_mask = evidence[..., 0].bool()
         # obs_mask[inds[0], inds[1], inds[2]] = True
         evidence[inds[0], inds[1], inds[2]] = reg_evi

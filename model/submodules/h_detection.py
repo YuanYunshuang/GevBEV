@@ -1,3 +1,4 @@
+import torch
 import torch_scatter
 from model.submodules.utils import *
 from ops.iou3d_nms_utils import nms_gpu, boxes_iou_bev, aligned_boxes_iou3d_gpu, \
@@ -47,10 +48,29 @@ class DetectionS1(nn.Module):
         for k, v in cfgs.items():
             setattr(self, k, v)
         self.device = getattr(self, 'device', 'cuda')
-        self.grid_size = int(self.det_r / self.voxel_size / self.stride * 2)
-        self.r = int(self.det_r / self.voxel_size)
-        self.x_max = (self.r - 1) // self.stride * self.stride        # relevant to ME
-        self.x_min = - (self.x_max + self.stride)                     # relevant to ME
+        if getattr(self, 'det_r', False):
+            self.grid_size = int(self.det_r / self.voxel_size / self.stride * 2)
+            self.rx = int(self.det_r / self.voxel_size)
+            self.x_max = (self.rx - 1) // self.stride * self.stride  # relevant to ME
+            self.x_min = - (self.x_max + self.stride)  # relevant to ME
+            self.ry = self.rx
+            self.y_max = self.x_max
+            self.y_min = self.x_min
+        elif getattr(self, 'lidar_range', False):
+            lr = self.lidar_range
+            self.grid_size = (
+                int((lr[3] - lr[0]) / self.voxel_size / self.stride),
+                int((lr[4] - lr[1]) / self.voxel_size / self.stride),
+            )
+            self.rx = int(lr[3] - lr[0] / self.voxel_size)
+            self.x_max = (self.rx - 1) // self.stride * self.stride  # relevant to ME
+            self.x_min = - (self.x_max + self.stride)  # relevant to ME
+            self.ry = int(lr[4] - lr[1] / self.voxel_size)
+            self.y_max = (self.ry - 1) // self.stride * self.stride  # relevant to ME
+            self.y_min = - (self.y_max + self.stride)  # relevant to ME
+        else:
+            raise NotImplementedError
+
         self.anchors = self.generate_anchors().to(self.device)
         # intermediate result
         self.xy = None
@@ -69,7 +89,7 @@ class DetectionS1(nn.Module):
         self.reg = linear_last(64, 32, 10 * 2)           # xyzlwh, ct1, st1, ct2, st2
 
     def generate_anchors(self):
-        xy = meshgrid(self.x_min, self.r, 2, step=self.stride,
+        xy = meshgrid(self.x_min, self.rx, self.y_min, self.ry, 2, step=self.stride,
                       ) * self.voxel_size  # h w 2
         h, w, _ = xy.shape
         anchors = torch.zeros((h, w, len(self.box_angles), 7))  # h w 2 7
@@ -109,7 +129,8 @@ class DetectionS1(nn.Module):
 
     def update_coords(self, coor):
         xy = coor.float().T
-        xy[1:] = (xy[1:] + self.x_min) / self.stride
+        xy[1] = (xy[1] + self.x_min) / self.stride
+        xy[2] = (xy[2] + self.y_min) / self.stride
         self.xy = xy.long()
         coor_ = coor.float()
         coor_[:, 1:] = coor_[:, 1:] * self.voxel_size
@@ -184,6 +205,8 @@ class DetectionS1(nn.Module):
             cur_scores_rectified = cur_scores * cur_ious ** 4
             idx_start = idx_end
             if len(cur_boxes) == 0:
+                boxes_fused.append(torch.zeros((0, 8), device=cur_boxes.device))
+                scores_fused.append(torch.zeros((0,), device=cur_boxes.device))
                 continue
             keep = nms_gpu(cur_boxes, cur_scores_rectified,
                            thresh=0.01, pre_maxsize=100)
@@ -227,20 +250,22 @@ class DetectionS1(nn.Module):
     @torch.no_grad()
     def get_target(self, batch_dict):
         gt_boxes = batch_dict['target_boxes']
-        # remove boxes with observation points < 3
-        veh_pts = self.get_vehicle_points(batch_dict)
-        boxes_decomposed, box_idxs_of_pts = points_in_boxes_gpu(
-            veh_pts, gt_boxes, batch_dict['batch_size']
-        )
 
+        # remove boxes with observation points < 3
+        raw_pts = self.get_raw_points(batch_dict)
+        boxes_decomposed, box_idxs_of_pts = points_in_boxes_gpu(
+            raw_pts, gt_boxes, batch_dict['batch_size']
+        )
         box_idx = [i for i in box_idxs_of_pts[box_idxs_of_pts >= 0].unique() if
                       (box_idxs_of_pts == i).sum() > 3]
         gt_boxes = boxes_decomposed[box_idx, :]
 
+        # get batch indices for boxes
         batch_size = sum(batch_dict['num_cav'])
         box_indices = []
         for i, n in enumerate(batch_dict['num_cav']):
             box_indices.extend([i] * n)
+
         batch_anchors = self.anchors[self.xy[1], self.xy[2]]
         iou_tgt = []
         boxes_aligned = []
@@ -249,22 +274,27 @@ class DetectionS1(nn.Module):
         for b in range(batch_size):
             cur_anchors = batch_anchors[self.xy[0] == b].view(-1, 7)
             cur_boxes = gt_boxes[gt_boxes[:, 0] == box_indices[b], 1:]
-            assert len(cur_boxes) > 0
-            assert len(cur_anchors) > 0
-            ious = boxes_iou_bev(cur_anchors, cur_boxes)
-            ious_max, max_idx = ious.max(dim=1)
-            pos = ious_max > self.iou_match
-            neg = ious_max < self.iou_unmatch
-            # down sample neg samples
-            s = min(self.sample_size, pos.sum())
-            if neg.sum() > self.sample_size:
-                perm = torch.randperm(neg.sum())[:self.sample_size]
-                neg = torch.where(neg)[0][perm]
-            cls = torch.ones_like(ious_max) * -1
-            cls[pos] = 1
-            cls[neg] = 0
-            boxes = cur_boxes[max_idx[pos]]
-            anchors = cur_anchors[pos]
+            if len(cur_boxes) > 0 and len(cur_anchors) > 0:
+                ious = boxes_iou_bev(cur_anchors, cur_boxes)
+                ious_max, max_idx = ious.max(dim=1)
+                pos = ious_max > self.iou_match
+                neg = ious_max < self.iou_unmatch
+                # down sample neg samples
+                s = min(self.sample_size, pos.sum())
+                if neg.sum() > self.sample_size:
+                    perm = torch.randperm(neg.sum())[:self.sample_size]
+                    neg = torch.where(neg)[0][perm]
+                cls = torch.ones_like(ious_max) * -1
+                cls[pos] = 1
+                cls[neg] = 0
+                boxes = cur_boxes[max_idx[pos]]
+                anchors = cur_anchors[pos]
+            else:
+                cls = torch.ones_like(cur_anchors[:, 0]) * -1
+                ious_max = torch.zeros_like(cur_anchors[:, 0])
+                boxes = torch.empty((0, 7), device=cur_anchors.device)
+                anchors = torch.empty((0, 7), device=cur_anchors.device)
+
             cls_tgt.append(cls.view(-1, 2))
             iou_tgt.append(ious_max.view(-1, 2))
             boxes_aligned.append(boxes)
@@ -278,10 +308,10 @@ class DetectionS1(nn.Module):
 
         return cls_tgt, iou_tgt, dir_tgt, reg_tgt
 
-    def get_vehicle_points(self, batch_dict):
+    def get_raw_points(self, batch_dict):
         raw_points = torch.cat([batch_dict['in_data'].C[:, :1],
                                 batch_dict['xyz']], dim=-1)
-        raw_points = raw_points[batch_dict['target_semantic'] == 1]
+        # raw_points = raw_points[batch_dict['target_semantic'] == 1]
         if len(raw_points[:, 0].unique()) > batch_dict['batch_size'] \
                 and 'num_cav' in batch_dict:
             for i, c in enumerate(batch_dict['num_cav']):

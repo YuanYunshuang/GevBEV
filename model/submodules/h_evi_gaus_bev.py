@@ -59,6 +59,7 @@ class EviGausBEV(BEVBase):
 
     def get_evidence_map(self, probs_weighted, coor):
         voxel_new = coor[:, 1:].view(-1, 1, 2) + self.nbrs
+        # TODO
         size = self.size
         xy = (torch.floor(voxel_new / self.res) + size).view(-1, 2)
         mask = torch.logical_and(xy >= 0, xy < (size * 2)).all(dim=1)

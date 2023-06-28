@@ -1,3 +1,4 @@
+import os
 import os.path as osp
 from collections import OrderedDict
 from PIL import Image
@@ -7,10 +8,16 @@ from dataset.openv2v.utils import *
 
 class OpV2VBase(BaseDataset):
 
-    def __init__(self, cfgs, mode):
-        super(OpV2VBase, self).__init__(cfgs, mode)
+    def __init__(self, cfgs, mode, use_cuda):
+        super(OpV2VBase, self).__init__(cfgs, mode, use_cuda)
         self.proj_first = True
         self.max_box_num = 100
+        if 'v2vreal' in self.cfgs['path'].lower():
+            self.isSim = False
+            self.order = 'hwl'
+        else:
+            self.isSim = True
+            self.order = 'lwh'
 
     def init_dataset(self):
         # first load all paths of different scenarios
@@ -37,9 +44,11 @@ class OpV2VBase(BaseDataset):
                 if j > self.cfgs['max_cav'] - 1:
                     # print('too many cavs')
                     break
-                self.scenario_static_objects[i] = load_yaml(
-                    os.path.join(scenario_path, 'static_vehicles.yaml')
-                )
+                # load static objects
+                static_obj_file = osp.join(scenario_path, 'static_vehicles.yaml')
+                if os.path.exists(static_obj_file):
+                    self.scenario_static_objects[i] = load_yaml(static_obj_file)
+
                 self.scenario_database[i][cav_id] = OrderedDict()
 
                 # save all yaml files to the dictionary
@@ -65,14 +74,17 @@ class OpV2VBase(BaseDataset):
                     lidar_file = osp.join(self.cfgs['path'], self.mode,
                                           scenario_folder, cav_id, timestamp
                                           + '_semantic_lidarcenter.bin')
+                    if not osp.exists(lidar_file):
+                        lidar_file = lidar_file.replace('_semantic_lidarcenter.bin', '.pcd')
                     self.scenario_database[i][cav_id][timestamp]['lidar'] = \
                         lidar_file
 
                     bevmap_file = osp.join(self.cfgs['path'], self.mode,
                                           scenario_folder, cav_id, timestamp
                                           + '_bev_road.png')
-                    self.scenario_database[i][cav_id][timestamp]['bevmap'] = \
-                        bevmap_file
+                    if osp.exists(bevmap_file):
+                        self.scenario_database[i][cav_id][timestamp]['bevmap'] = \
+                            bevmap_file
 
                     if self.cfgs['load_camera']:
                         camera_files = self.load_camera_files(cav_path, timestamp)
@@ -129,8 +141,7 @@ class OpV2VBase(BaseDataset):
         for cav_id, selected_cav_base in base_data_dict.items():
             # check if the cav is within the communication range with ego
             cav_pose = selected_cav_base['params']['lidar_pose']
-            distance = np.sqrt((cav_pose[0] - ego_lidar_pose[0]) ** 2 +
-                               (cav_pose[1] - ego_lidar_pose[1]) ** 2)
+            distance = dist_two_pose(cav_pose, ego_lidar_pose)
             if distance > self.cfgs['com_range']:
                 continue
 
@@ -167,7 +178,7 @@ class OpV2VBase(BaseDataset):
              'object_ids': [object_id_stack[i] for i in unique_indices],
              'projected_lidar': projected_lidar,
              'tf_matrices': tf_matrices,
-             'bev_map': base_data_dict[ego_id]['bev_map'],
+             'bev_map': base_data_dict[ego_id].get('bev_map', None),
              'cav_num': cav_num,
              'pairwise_t_matrix': pairwise_t_matrix})
 
@@ -195,13 +206,20 @@ class OpV2VBase(BaseDataset):
             # load the corresponding data into the dictionary
             data[cav_id]['params'] = \
                 load_yaml(cav_content[timestamp_key]['yaml'])
-            data[cav_id]['params']['vehicles'].update(
-                self.scenario_static_objects[scenario_index]
-            )
-            data[cav_id]['lidar_np'] = \
-                np.fromfile(cav_content[timestamp_key]['lidar'],
-                            dtype="float32").reshape(-1, 4)
-            if cav_content['ego']:
+            if scenario_index in self.scenario_static_objects:
+                data[cav_id]['params']['vehicles'].update(
+                    self.scenario_static_objects[scenario_index]
+                )
+            lidar_file = cav_content[timestamp_key]['lidar']
+            if lidar_file[-3:] == 'bin':
+                data[cav_id]['lidar_np'] = \
+                    np.fromfile(lidar_file, dtype="float32").reshape(-1, 4)
+            elif lidar_file[-3:] == 'pcd':
+                data[cav_id]['lidar_np'] = \
+                    np.loadtxt(lidar_file, skiprows=11).reshape(-1, 4)
+            else:
+                raise NotImplementedError
+            if cav_content['ego'] and 'bev_map' in data[cav_id]:
                 data[cav_id]['bev_map'] = \
                     Image.open(cav_content[timestamp_key
                                ]['bevmap']).__array__()[::-1, :]
@@ -238,7 +256,9 @@ class OpV2VBase(BaseDataset):
         # retrieve objects under ego coordinates
         object_bbx_center, object_bbx_mask, object_ids = \
             generate_object_center([selected_cav_base],
-                                   self.cfgs['lidar_range'], ego_pose)
+                                   self.cfgs['lidar_range'],
+                                   transformation_matrix if not self.isSim else ego_pose,
+                                   self.order)
 
         # filter lidar
         lidar_np = selected_cav_base['lidar_np']

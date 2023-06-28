@@ -187,15 +187,29 @@ def linear_layers(in_out, activations=None):
     return nn.Sequential(*layers)
 
 
-def meshgrid(xmin, xmax, dim, n_steps=None, step=None):
+def meshgrid(xmin, xmax, ymin=None, ymax=None, dim=2, n_steps=None, step=None):
     assert dim <= 3, f'dim <= 3, but dim={dim} is given.'
-    if n_steps is not None:
-        x = torch.linspace(xmin, xmax, n_steps)
-    elif step is not None:
-        x = torch.arange(xmin, xmax, step)
+    if ymin is not None and ymax is not None:
+        assert dim == 2
+        if n_steps is not None:
+            x = torch.linspace(xmin, xmax, n_steps)
+            y = torch.linspace(ymin, ymax, n_steps)
+        elif step is not None:
+            x = torch.arange(xmin, xmax, step)
+            y = torch.arange(ymin, ymax, step)
+        else:
+            raise NotImplementedError
+        xs = (x, y)
     else:
-        raise NotImplementedError
-    xs = (x, ) * dim
+        if n_steps is not None:
+            x = torch.linspace(xmin, xmax, n_steps)
+            if ymin is not None and ymax is not None:
+                y = torch.linspace(ymin, ymax, n_steps)
+        elif step is not None:
+            x = torch.arange(xmin, xmax, step)
+        else:
+            raise NotImplementedError
+        xs = (x, ) * dim
     indexing = 'ijk'
     indexing = indexing[:dim]
     coor = torch.stack(
@@ -203,6 +217,15 @@ def meshgrid(xmin, xmax, dim, n_steps=None, step=None):
         dim=-1
     )
     return coor
+
+
+def mink_coor_limit(lidar_range, voxel_size, stride):
+    lr = lidar_range
+    x_max = (round(lr[3] / voxel_size) - 1) // stride * stride  # relevant to ME
+    x_min = (round(lr[0] / voxel_size) + 1) // stride * stride - stride  # relevant to ME
+    y_max = (round(lr[4] / voxel_size) - 1) // stride * stride
+    y_min = (round(lr[1] / voxel_size) + 1) // stride * stride - stride
+    return [x_min, x_max, y_min, y_max]
 
 
 def metric2indices(coor, voxel_size):
@@ -268,7 +291,7 @@ def weighted_mahalanobis_dists(reg_evi, reg_var, dists, var0):
     return probs_weighted
 
 
-def draw_sample_prob(centers, reg, samples, res, distr_r, det_r, batch_size, var0):
+def draw_sample_prob(centers, reg, samples, res, distr_r, lr, batch_size, var0):
     # from utils.vislib import draw_points_boxes_plt
     # vis_ctrs = centers[centers[:, 0]==0, 1:].cpu().numpy()
     # vis_sams = samples[samples[:, 0]==0, 1:].cpu().numpy()
@@ -278,11 +301,12 @@ def draw_sample_prob(centers, reg, samples, res, distr_r, det_r, batch_size, var
     reg_evi = reg[:, :2]
     reg_var = reg[:, 2:].view(-1, 2, 2)
 
-    grid_size = int(det_r / res) * 2
-    centers_map = torch.ones((batch_size, grid_size, grid_size),
+    grid_size = (round((lr[3] - lr[0]) / res), round((lr[4] - lr[1]) / res))
+    centers_map = torch.ones((batch_size, grid_size[0], grid_size[1]),
                               device=reg.device).long() * -1
     ctridx = metric2indices(centers, res).T
-    ctridx[1:] += int(grid_size / 2)
+    ctridx[1] += grid_size[0]
+    ctridx[2] += grid_size[1]
     centers_map[ctridx[0], ctridx[1], ctridx[2]] = torch.arange(ctridx.shape[1],
                                                                 device=ctridx.device)
 
@@ -291,9 +315,11 @@ def draw_sample_prob(centers, reg, samples, res, distr_r, det_r, batch_size, var
     samidx = metric2indices(samples, res).view(-1, 1, 3) \
              + pad_l(offset).view(1, -1, 3)  # n s*s 3
     samidx = samidx.view(-1, 3).T  # 3 n*s*s
-    samidx[1:] = (samidx[1:] + (det_r / res))
-    mask1 = torch.logical_and((samidx[1:] >= 0).all(dim=0),
-                             (samidx[1:] < (det_r / res * 2)).all(dim=0))
+    samidx[1] = (samidx[1] - (lr[0] / res))
+    samidx[2] = (samidx[2] - (lr[1] / res))
+    mask1 = (samidx[1] >= 0) & (samidx[1] < grid_size[0]) & \
+            (samidx[2] >= 0) & (samidx[2] < grid_size[1])
+
 
     inds = samidx[:, mask1].long()
     ctr_idx_of_sam = centers_map[inds[0], inds[1], inds[2]]

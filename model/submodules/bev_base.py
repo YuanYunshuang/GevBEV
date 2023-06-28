@@ -1,10 +1,6 @@
 import functools
-import torch, torch_scatter
-import MinkowskiEngine as ME
-from torch import nn
-from model.submodules.utils import minkconv_conv_block, indices2metric, \
-    pad_r, linear_last, fuse_batch_indices, meshgrid, metric2indices, \
-    weighted_mahalanobis_dists
+import torch_scatter
+from model.submodules.utils import *
 from ops.utils import points_in_boxes_gpu
 from model.losses.common import cross_entroy_with_logits
 
@@ -27,9 +23,15 @@ class HBEVBase(nn.Module):
             self.convs.append(k)
             setattr(self, f'convs_{k}', self.get_conv_layer(conv_args))
             stride = int(k[1])
-            r = int(self.det_r / self.voxel_size)
-            setattr(self, f'x_max_{k}', (r - 1) // stride * stride)  # relevant to ME
-            setattr(self, f'x_min_{k}', - (r - 1) // stride * stride - stride)
+
+            if getattr(self, 'det_r', False):
+                lr = [-self.det_r, -self.det_r, 0, self.det_r, self.det_r, 0]
+            elif getattr(self, 'lidar_range', False):
+                lr = self.lidar_range
+            else:
+                raise NotImplementedError
+            setattr(self, f'mink_xylim_{k}', mink_coor_limit(lr, self.voxel_size, stride))  # relevant to ME
+
 
     def get_conv_layer(self, args):
         minkconv_layer = functools.partial(
@@ -50,22 +52,27 @@ class HBEVBase(nn.Module):
             # todo: barely fuse voxels with batch indices might cause overlapped voxels even it has
             #  a low chance, we temporarily average them.
             coor, indices = coor[:, :3].unique(dim=0, return_inverse=True)
-            # feat = torch_scatter.scatter_mean(stensor3d.F, indices, dim=0)
+            feat = torch_scatter.scatter_mean(stensor3d.F, indices, dim=0)
             obs_mask = self.get_obs_mask(coor, stride)
 
             stensor2d = ME.SparseTensor(
-                coordinates=stensor3d.C[:, :3].contiguous(),
-                features=stensor3d.F,
+                coordinates=coor.contiguous(),
+                features=feat,
                 tensor_stride=[stride] * 2
             )
             stensor2d = getattr(self, f'convs_{k}')(stensor2d)
             # after coordinate expansion, some coordinates will exceed the maximum detection
             # range, therefore they are removed here.
 
-            mask = torch.logical_and(
-                stensor2d.C[:, 1:] >= getattr(self, f'x_min_{k}'),
-                stensor2d.C[:, 1:] <= getattr(self, f'x_max_{k}'),
-            ).all(dim=-1)
+            # mask = torch.logical_and(
+            #     stensor2d.C[:, 1:] >= getattr(self, f'x_min_{k}'),
+            #     stensor2d.C[:, 1:] <= getattr(self, f'x_max_{k}'),
+            # ).all(dim=-1)
+            # mask = mask.all(dim=-1)
+            xylim = getattr(self, f'mink_xylim_{k}')
+            mask = (stensor2d.C[:, 1] > xylim[0]) & (stensor2d.C[:, 1] <= xylim[1]) & \
+                   (stensor2d.C[:, 2] > xylim[2]) & (stensor2d.C[:, 2] <= xylim[3])
+
             # mask = (stensor2d.C[:, 1:].abs() < (self.det_r / self.voxel_size)).all(dim=-1)
             coor = stensor2d.C[mask]
             feat = stensor2d.F[mask]
@@ -80,21 +87,30 @@ class HBEVBase(nn.Module):
 
     def get_obs_mask(self, coor, stride):
         res = stride * self.voxel_size
-        size = int(self.det_r / res)
-        steps = int(self.distr_r / res) * 2 + 1
+        if getattr(self, 'det_r', False):
+            sizex = round(self.det_r * 2 / res)
+            sizey = sizex
+        else:
+            sizex = round((self.lidar_range[3] - self.lidar_range[0]) / res)
+            sizey = round((self.lidar_range[4] - self.lidar_range[1]) / res)
+        steps = round(self.distr_r / res) * 2 + 1
         offset = meshgrid(-self.distr_r, self.distr_r, 2,
                           n_steps=steps).to(coor.device).view(-1, 2)
         nbrs = offset[torch.norm(offset, dim=1) < 2].view(1, -1, 2)
         voxel_new = coor[:, 1:3].view(-1, 1, 2) / stride + nbrs
-        xy = (torch.floor(voxel_new / res) + size).view(-1, 2)
-        mask = torch.logical_and(xy >= 0, xy < (size * 2)).all(dim=1)
-        xy = xy[mask].long().T
+        x = (torch.floor(voxel_new [..., 0] / res) - round(self.lidar_range[0] / res)).view(-1)
+        y = (torch.floor(voxel_new [..., 1] / res) - round(self.lidar_range[1] / res)).view(-1)
+        maskx = torch.logical_and(x >= 0, x < sizex)
+        masky = torch.logical_and(y >= 0, y < sizey)
+        mask = torch.logical_and(maskx, masky)
+        x = x[mask].long()
+        y = y[mask].long()
         batch_indices = torch.tile(coor[:, 0].view(-1, 1), (1, nbrs.shape[1])).view(-1)
         batch_indices = batch_indices[mask].long()
         batch_size = coor[:, 0].max().int() + 1
-        obs_mask = torch.zeros((batch_size, size * 2, size * 2),
+        obs_mask = torch.zeros((batch_size, sizex, sizey),
                                device=coor.device)
-        obs_mask[batch_indices, xy[0], xy[1]] = 1
+        obs_mask[batch_indices, x, y] = 1
         return obs_mask.bool()
 
     def loss(self, batch_dict):
@@ -117,10 +133,17 @@ class BEVBase(nn.Module):
         self.sampling = getattr(self, 'sampling', None)
         self.sample_pixels = True if self.sampling is not None else False
         self.res = self.stride * self.voxel_size
-        self.size = int(self.det_r / self.res)
-        r = int(self.det_r / self.voxel_size)
-        self.x_max = (r - 1) // self.stride * self.stride        # relevant to ME
-        self.x_min = - (self.x_max + self.stride)                # relevant to ME
+        if getattr(self, 'det_r', False):
+            lr = [-self.det_r, -self.det_r, 0, self.det_r, self.det_r, 0]
+        elif getattr(self, 'lidar_range', False):
+            lr = self.lidar_range
+        else:
+            raise NotImplementedError
+        self.mink_xylim = mink_coor_limit(lr, self.voxel_size, self.stride)
+        self.size_x = round((lr[3] - lr[0]) / self.res)
+        self.size_y = round((lr[4] - lr[1]) / self.res)
+        self.offset_sz_x = round(lr[0] / self.res)
+        self.offset_sz_y = round(lr[1] / self.res)
 
         feat_dim = 32
         self.distr_reg = self.get_reg_layer(feat_dim)
@@ -158,8 +181,8 @@ class BEVBase(nn.Module):
             batch_dict[f'distr_{self.name}'] = {
                 'evidence': evidence,
                 'obs_mask': conv_out['obs_mask'],
-                'Nall': self.out['Nall'],
-                'Nsel': self.out['Nsel']
+                'Nall': self.out.get('Nall', None),
+                'Nsel': self.out.get('Nsel', None)
             }
 
     def down_sample(self, coor, feat):
@@ -185,11 +208,14 @@ class BEVBase(nn.Module):
     def sample_with_road(self, coor_in, feat_in, batch_dict):
         evidence = batch_dict['distr_surface']['evidence']
         road_mask = torch.argmax(evidence, dim=-1).bool()
-        sm = road_mask.shape[1]
-        ratio_diff = self.size * 2 / sm
+        sm = road_mask.shape[1:]
+        ratio_diff_x, ratio_diff_y = self.size_x / sm[0], self.size_y / sm[1]
         coor = coor_in.clone().long().T
-        coor[1:] = torch.floor((coor[1:] + self.size) / ratio_diff).long()
-        mask1 = torch.logical_and(coor[1:] >= 0, coor[1:] < sm).all(dim=0)
+        coor[1] = torch.floor((coor[1] - self.offset_sz_x) / ratio_diff_x).long()
+        coor[2] = torch.floor((coor[2] - self.offset_sz_y) / ratio_diff_y).long()
+        mask1x = torch.logical_and(coor[1] >= 0, coor[1] < sm[0])
+        mask1y = torch.logical_and(coor[2] >= 0, coor[2] < sm[1])
+        mask1 = torch.logical_and(mask1x, mask1y)
         mask2 = road_mask[coor[0, mask1], coor[1, mask1], coor[2, mask1]]
         coor_out = coor_in[mask1][mask2]
         feat_out = feat_in[mask1][mask2]
@@ -222,8 +248,11 @@ class BEVBase(nn.Module):
     @torch.no_grad()
     def pts_to_masked_indices(self, pts):
         ixy = metric2indices(pts[:, :3], self.res).long()
-        ixy[:, 1:] += self.size
-        mask = torch.logical_and(ixy[:, 1:] >= 0, ixy[:, 1:] < self.size * 2).all(dim=-1)
+        ixy[:, 1] -= self.offset_sz_x
+        ixy[:, 2] -= self.offset_sz_y
+        maskx = torch.logical_and(ixy[:, 1] >= 0, ixy[:, 1] < self.size_x)
+        masky = torch.logical_and(ixy[:, 2] >= 0, ixy[:, 2] < self.size_y)
+        mask = torch.logical_and(maskx, masky)
         indices = ixy[mask]
         return indices, mask
 

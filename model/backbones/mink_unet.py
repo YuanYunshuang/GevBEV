@@ -11,6 +11,7 @@ class MinkUnet(nn.Module):
             if name not in ["model", "__class__"]:
                 setattr(self, name, value)
         self.d = getattr(self, 'd', 3)
+        self.n_cls = cfgs.get('n_cls', 0)
 
         self.enc_mlp = linear_layers([self.in_dim, 32, 32])
 
@@ -26,12 +27,13 @@ class MinkUnet(nn.Module):
         self.out_layer = minkconv_conv_block(64, 32, 3, 1, 3, 0.1,
                                              'ReLU', norm_before=True)
 
-        self.cls_layer = linear_last(64, 32, self.n_cls)
+        if self.n_cls > 0:
+            self.cls_layer = linear_last(64, 32, self.n_cls)
 
-        self.semseg_loss = functools.partial(
-            edl_mse_loss,
-            n_cls=self.n_cls,
-            annealing_step=self.annealing_step)
+            self.semseg_loss = functools.partial(
+                edl_mse_loss,
+                n_cls=self.n_cls,
+                annealing_step=self.annealing_step)
 
         self.out = {}
 
@@ -72,8 +74,8 @@ class MinkUnet(nn.Module):
 
         vars = locals()
         batch_dict['backbone'] = {k: vars[k] for k in self.cache}
-
-        self.out['evidence'] = self.cls_layer(p0).relu()
+        if self.n_cls > 0:
+            self.out['evidence'] = self.cls_layer(p0).relu()
 
     def prepare_input_data(self, batch_dict):
         in_data = ME.TensorField(
@@ -111,9 +113,13 @@ class MinkUnet(nn.Module):
         return feats
 
     def loss(self, batch_dict):
-        loss, loss_dict = self.semseg_loss(
-            'unet', self.out['evidence'],
-            batch_dict['target_semantic'],
-            batch_dict['epoch']
-        )
-        return loss, loss_dict
+        if self.n_cls > 0:
+            loss, loss_dict = self.semseg_loss(
+                'unet', self.out['evidence'],
+                batch_dict['target_semantic'],
+                batch_dict['epoch']
+            )
+            return loss, loss_dict
+        else:
+            return 0, {}
+

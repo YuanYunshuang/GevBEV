@@ -91,7 +91,7 @@ def plot_keypoints_match(batch_dict):
     plt.close()
 
 
-def draw_box_plt(boxes_dec, ax, color=None, linewidth_scale=2.0, linestyle='solid'):
+def draw_box_plt(boxes_dec, ax, color=None, linewidth_scale=1.0, linestyle='solid'):
     """
     draw boxes in a given plt ax
     :param boxes_dec: (N, 5) or (N, 7) in metric
@@ -148,7 +148,7 @@ def draw_points_boxes_plt(pc_range=None, points=None, boxes_pred=None, boxes_gt=
             assert isinstance(pc_range, list) and len(pc_range)==4, \
                 "pc_range should be a int, float or list of lenth 6 or 4"
     if ax is None:
-        ax = plt.figure(figsize=(10, 10)).add_subplot(1, 1, 1)
+        ax = plt.figure(figsize=(pc_range[2] / 10, pc_range[3] / 10)).add_subplot(1, 1, 1)
         ax.set_aspect('equal', 'box')
     if pc_range is not None:
         ax.set(xlim=(pc_range[0], pc_range[2]),
@@ -168,5 +168,10 @@ def draw_points_boxes_plt(pc_range=None, points=None, boxes_pred=None, boxes_gt=
     if return_ax:
         return ax
     # plt.show()
-    plt.savefig('/media/hdd/yuan/TMP/tmp.png')
+    plt.savefig('./tmp/tmp.png')
     plt.close()
+
+
+def draw_img(img):
+    plt.imshow(img)
+    plt.savefig("./tmp/img.png")

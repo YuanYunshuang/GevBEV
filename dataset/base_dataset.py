@@ -1,22 +1,29 @@
 import logging, tqdm
+
+import matplotlib.pyplot as plt
 import numpy as np
 import torch
+import logging
 import torch.nn.functional as F
+from scipy.spatial.transform.rotation import Rotation as R
+
 import dataset.processors as PP
 from torch.utils.data import Dataset
-from dataset.utils import project_points_by_matrix
+from dataset.data_utils import project_points_by_matrix
 from utils.pclib import rotate_points_along_z
 from utils.box_utils import limit_period
-from utils.vislib import draw_points_boxes_plt
+from utils.vislib import draw_points_boxes_plt, draw_img
+from utils.misc import print_exec_time
 
 
 class BaseDataset(Dataset):
     LABEL_COLORS = {}
     VALID_CLS = []
 
-    def __init__(self, cfgs, mode):
+    def __init__(self, cfgs, mode, use_cuda=False):
         self.cfgs = cfgs
         self.mode = mode
+        self.device = torch.device('cuda') if use_cuda else torch.device('cpu')
         self.visualize = cfgs['visualize']
 
         self.samples = []
@@ -81,6 +88,8 @@ class BaseDataset(Dataset):
         data_dict = self.sample_bev_pts(data_dict)
         if self.mode == 'train' and self.cfgs['augmentation']:
             data_dict = self.augmentation(data_dict)
+        if self.cfgs.get('loc_err_flag', False):
+            data_dict = self.add_loc_err(data_dict)
         data_dict = self.crop_points_range(data_dict)
         data_dict = self.positive_z(data_dict)
         coords, features = self.compose_coords_features(self.cfgs['voxel']['coords'],
@@ -108,68 +117,73 @@ class BaseDataset(Dataset):
             'bevmap_dynamic': data_dict.get('bevmap_dynamic', None),
         }
 
+    @print_exec_time
     def sample_bev_pts(self, data_dict):
         """
         Sample BEV points based on bev map and lidar points.
+        This function can runs on GPU to speed up runtime.
+
         :param data_dict: dict
         :return: data_dict: updated with sampled bev_points -
                 np.ndarray [K, 3], columns are (x, y, bev_cls)
         """
         bevmap_static = data_dict['bevmap_static']
         bevmap_dynamic = data_dict['bevmap_dynamic']
+        device = self.device
+        if isinstance(bevmap_dynamic, np.ndarray):
+            bevmap_dynamic = torch.from_numpy(bevmap_dynamic).to(device)
+            if bevmap_static is not None:
+                bevmap_static = torch.from_numpy(bevmap_static).to(device)
+
         x_lim = self.cfgs['lidar_range'][3]
         y_lim = self.cfgs['lidar_range'][4]
         lidar = data_dict['lidar']
         lidar_idx = data_dict['lidar_idx']
+        res = 0.4
 
-        bev_points = []
-        bev_points_idx = []
+        # generate random point samples
+        points2d = np.concatenate([lidar_idx[:, None], lidar[:, :2]], axis=1)
+        points2d = torch.from_numpy(points2d).to(device)
 
-        for idx in sorted(np.unique(lidar_idx)):
-            points = lidar[lidar_idx == idx][:, :2]
-            # ramdom sampling
-            res = 0.4
-            points = np.unique(points // res, axis=0) * res
-            points = points.reshape(-1, 2, 1) + np.random.normal(0, 3, (len(points), 2, 10))
-            points = np.unique(points // res, axis=0) * res
-            points = points.transpose(0, 2, 1).reshape(-1, 2)
-            if not self.cfgs.get("discrete_bev_pts", False):
-                points = points + np.random.normal(0, 1, (len(points), 2))
+        offsets = torch.randn((len(points2d), 10, 3), device=device) * 3
+        offsets[..., 0] = 0  # set idx column to 0
+        points2d = points2d.reshape(-1, 1, 3) + offsets
+        res_vec = torch.tensor([[[1, res, res]]], device=device)
+        points2d = torch.unique(torch.div(points2d, res_vec, rounding_mode='floor'
+                                          ).reshape(-1, 3), dim=0) * res_vec.reshape(1, 3)
+        if not self.cfgs.get("discrete_bev_pts", False):
+            points2d[:, 1:] = points2d[:, 1:] + torch.randn((len(points2d), 2), device=device)
 
-            h, w = bevmap_static.shape
-            pixels_per_meter = 1 / self.cfgs['bev_res']
-            xs = np.clip(np.floor((points[:, 0] + x_lim) * pixels_per_meter)
-                         .astype(int), a_min=0, a_max=h - 1)
-            ys = np.clip(np.floor((points[:, 1] + y_lim) * pixels_per_meter)
-                         .astype(int), a_min=0, a_max=w - 1)
-            bev_static = bevmap_static[xs, ys]
-            bev_dynamic = bevmap_dynamic[xs, ys]
+        # retrieve labels from bev maps and downsample is necessary
+        h, w = bevmap_dynamic.shape
+        pixels_per_meter = 1 / self.cfgs['bev_res']
+        xs = torch.clip(torch.floor((points2d[:, 1] + x_lim) * pixels_per_meter).long(), 0, h - 1)
+        ys = torch.clip(torch.floor((points2d[:, 2] + y_lim) * pixels_per_meter).long(), 0, w - 1)
+        labels = torch.zeros_like(points2d[:, :2])
+        sample_idx = []
+        is_dynamic = bevmap_dynamic[xs, ys] > 0
+        labels[is_dynamic, 1] = 1  # 2nd col. --> dynamic label
+        sample_idx.append(torch.where(is_dynamic)[0])
+        is_pos = is_dynamic
+        if bevmap_static is not None:
+            is_static = bevmap_static[xs, ys] > 0
+            labels[is_static, 0] = 1   # 1st col. --> static label
+            is_pos = torch.logical_or(is_dynamic, is_static)
+            static_idx = torch.where(is_static)
+            if len(static_idx) > 3000:
+                # only sample <=3000 static
+                static_idx = static_idx[torch.randperm(len(static_idx))[:3000]]
+            sample_idx.append(static_idx)
+        neg_idx = torch.where(torch.logical_not(is_pos))[0]
+        sample_idx.append(neg_idx[torch.randperm(len(neg_idx))[:3000]])  # only sample <=3000 negative
 
-            labels = np.zeros_like(points[:, :2]) # neg static
-            labels[bev_static > 0, 0] = 1  # pos dynamic
+        sample_idx = torch.cat(sample_idx, dim=0)
+        # bev pts col. attr. (idx, x, y, static_lbl, dynamic_lbl)
+        bev_points = torch.cat([points2d[sample_idx], labels[sample_idx]], dim=1).cpu().numpy()
 
-            # sample dynamic points
-            labels[bev_dynamic > 0, 1] = 1
-            bev_pts = np.concatenate([points, labels], axis=1)
-            # sample static points
-            neg_idx = np.where(bev_pts[:, -2] == 0)[0]
-            if len(neg_idx) > 3000:
-                neg_idx = np.random.choice(neg_idx, 3000)
-            road_idx = np.where(bev_pts[:, -2] == 1)[0]
-            if len(road_idx) > 3000:
-                road_idx = np.random.choice(road_idx, 3000)
-
-            veh_idx = np.where(bev_pts[:, -1] == 1)[0]
-            selected = np.concatenate([neg_idx, road_idx, veh_idx], axis=0)
-            np.random.shuffle(selected)
-            bev_pts = bev_pts[selected]
-            bev_points.append(bev_pts)
-            bev_points_idx.append(np.ones_like(bev_pts[:, 0]) * idx)
-        bev_points = np.concatenate(bev_points, axis=0)
-        bev_points_idx = np.concatenate(bev_points_idx, axis=0)
         data_dict.update({
-            'pts': bev_points,
-            'bev_pts_idx': bev_points_idx,
+            'pts': bev_points[:, 1:],
+            'bev_pts_idx': bev_points[:, 0],
         })
         return data_dict
 
@@ -234,6 +248,19 @@ class BaseDataset(Dataset):
             'boxes': boxes
         })
 
+        return data_dict
+
+    def add_loc_err(self, data_dict):
+        """Add loc noise to cav"""
+        tf_matrices = data_dict['tf_matrices']
+        xyz_noise = np.random.normal(0, self.cfgs['loc_err_t_std'], 3)
+        rot_noise = np.random.normal(0, self.cfgs['loc_err_r_std'], 3)
+        rot_noise[:2] = 0
+        noise_pose = np.eye(4)
+        rot_mat = R.from_euler('xyz', rot_noise, degrees=True).as_matrix()
+        noise_pose[:3, :3] = rot_mat @ tf_matrices[1, :3, :3]
+        noise_pose[:3, 3] = tf_matrices[1, :3, 3] + xyz_noise
+        tf_matrices[1] = noise_pose
         return data_dict
 
     def crop_points_by_features(self, features):
@@ -322,6 +349,8 @@ class BaseDataset(Dataset):
         :return: np.ndarray [N, c+1], class labels in the smaller class set
         """
         lidar = data_dict['lidar']
+        if (lidar[:, -1] == -1).all():
+            return data_dict
         assert len(self.VALID_CLS) > 0, 'VALID_CLS not set!'
         cls = np.zeros_like(lidar[:, -1])
         for tgt_cls, src_cls_list in enumerate(self.VALID_CLS):
@@ -332,64 +361,75 @@ class BaseDataset(Dataset):
         data_dict['lidar'] = lidar
         return data_dict
 
+    @print_exec_time
     def add_free_space_points(self, data_dict):
-        # we set maximum height of free space points to z_min=1.5m
-        # select points lower than z_min
-        self.lidar_transform(data_dict)
-        lidar = data_dict['lidar']
-        lidar_idx = data_dict['lidar_idx']
+        # transform lidar points from ego to local, and to torch tensor to speed up runtime
+        device = self.device
+        lidar = torch.from_numpy(data_dict['lidar']).to(device)
+        lidar_idx = torch.from_numpy(data_dict['lidar_idx']).to(device)
+        tf_matrices = torch.from_numpy(data_dict['tf_matrices']).to(device)
+        lidar_idx, lidar = self.lidar_transform(lidar, lidar_idx, tf_matrices)
+        # get point lower than z_min=1.5m
         z_min = self.cfgs['free_space_h']
         m = lidar[:, 2] < z_min
         points = lidar[m][:, :3]
         points_idx = lidar_idx[m]
-        # calculate
-        d = self.get_feature_d(points)
+
+        # generate free space points based on points
+        d = torch.norm(points[:, :2], dim=1).reshape(-1, 1)
         free_space_d = self.cfgs.get('free_space_d', 3)
         free_space_step = self.cfgs.get('free_space_step', 1)
-        steps = int(free_space_d / free_space_step)
-        delta_d = np.linspace(1, free_space_d,
-                              steps).reshape(1, steps)
-        tmp = (d - delta_d) / d # Nx5
+        delta_d = torch.arange(1, free_space_d, free_space_step,
+                               device=device).reshape(1, -1)
+        steps = delta_d.shape[1]
+        tmp = (d - delta_d) / d  # Nxsteps
         xyz_new = points[:, None, :] * tmp[:, :, None] # Nx3x3
-        points_idx = np.tile(points_idx.reshape(-1, 1), (1, steps))
-        m = tmp > 0
-        xyz_new = xyz_new[m]
-        points_idx = points_idx[m]
-        m = xyz_new[..., 2] < z_min
-        xyz_new = xyz_new[m]
-        points_idx = points_idx[m]
-        ixyz = np.concatenate([points_idx.reshape(-1, 1), xyz_new], axis=1)
-        selected = np.unique(np.floor(ixyz).astype(int),  # resolution 1m
-                             return_index=True, axis=0)[1]
-        xyz_new = xyz_new[selected]
-        points_idx = points_idx[selected]
-        xyz_new = np.concatenate([
-            xyz_new,
-            - np.ones_like(xyz_new[:, :2])
-        ], axis=-1)
-        # pad lidar with intensity 1
+        points_idx = torch.tile(points_idx.reshape(-1, 1), (1, steps))
+        ixyz = torch.cat([points_idx.reshape(-1, steps, 1), xyz_new], dim=-1)
+
+        # 1.remove free space points with negative distances to lidar center
+        # 2.remove free space points higher than z_min
+        # 3.remove duplicated points with resolution 1m
+        ixyz = ixyz[tmp > 0]
+        ixyz = ixyz[ixyz[..., 3] < z_min]
+        selected = torch.unique(torch.floor(ixyz).long(), return_inverse=True, dim=0)[1]
+        ixyz = ixyz[torch.unique(selected)]
+
+        # pad free space point intensity as -1
+        ixyz = torch.cat([ixyz, - torch.ones_like(ixyz[:, :2])], dim=-1)
+
+        # pad lidar with intensity 1 if not given
         if lidar.shape[1] == 4: #xyzl
-            lidar = np.concatenate([
-                lidar[:, :3],
-                np.ones_like(lidar[:, :1]),
-                lidar[:, 3:]
-            ], axis=-1)
+            lidar = torch.cat([lidar[:, :3], np.ones_like(lidar[:, :1]), lidar[:, 3:]], dim=-1)
         assert lidar.shape[1] == 5 #xyzil
-        lidar = np.concatenate([lidar, xyz_new], axis=0)
-        lidar_idx = np.concatenate([lidar_idx, points_idx], axis=0)
-        data_dict['lidar'] = lidar
-        data_dict['lidar_idx'] = lidar_idx
-        self.lidar_transform(data_dict, ego2local=False)
+
+        # transform augmented points back to ego and numpy
+        lidar = torch.cat([lidar, ixyz[:, 1:]], dim=0)
+        lidar_idx = torch.cat([lidar_idx, ixyz[:, 0]], dim=0)
+        lidar_idx, lidar = self.lidar_transform(lidar, lidar_idx, tf_matrices, ego2local=False)
+        data_dict['lidar'] = lidar.cpu().numpy()
+        data_dict['lidar_idx'] = lidar_idx.cpu().numpy()
         return data_dict
 
-    def lidar_transform(self, data_dict, ego2local=True):
-        lidar = data_dict['lidar']
-        lidar_idx = data_dict['lidar_idx']
-        if 'tf_matrices' in data_dict:
-            tf_matrices = data_dict['tf_matrices']
-            for i in np.unique(lidar_idx).astype(int):
-                mat = np.linalg.inv(tf_matrices[i]) if ego2local else tf_matrices[i]
-                lidar[lidar_idx==i, :3] = project_points_by_matrix(lidar[lidar_idx==i, :3], mat)
+    def lidar_transform(self,
+                        lidar: torch.Tensor,
+                        lidar_idx: torch.Tensor,
+                        tf_matrices: torch.Tensor,
+                        ego2local=True):
+        lidar_tf = []
+        lidar_tf_idx = []
+        uniq_idx = [int(x.item()) for x in torch.unique(lidar_idx)]
+        for i in uniq_idx:
+            mat = torch.inverse(tf_matrices[i]) if ego2local else tf_matrices[i]
+            mask = lidar_idx == i
+            cur_lidar = project_points_by_matrix(lidar[mask], mat, True)
+            cur_idx = lidar_idx[mask]
+            lidar_tf_idx.append(cur_idx)
+            lidar_tf.append(cur_lidar)
+
+        lidar_tf_idx = torch.cat(lidar_tf_idx, dim=0)
+        lidar_tf = torch.cat(lidar_tf, dim=0)
+        return lidar_tf_idx, lidar_tf
 
     def visualize_data(self, data_dict):
         boxes = data_dict['target_boxes']
@@ -410,12 +450,15 @@ class BaseDataset(Dataset):
             for i in np.unique(lidar_idx):
                 ax = draw_points_boxes_plt(r, points=lidar[lidar_idx == i],
                                            points_c='c', ax=ax, return_ax=True,
-                                           marker_size=0.5)
+                                           marker_size=0.3)
             else:
                 ax = draw_points_boxes_plt(r, points=lidar,
                                            points_c='c', ax=ax, return_ax=True,
-                                           marker_size=0.5)
+                                           marker_size=0.3)
         draw_points_boxes_plt(r, boxes_gt=boxes, ax=ax)
+
+        # draw bev maps
+        draw_img(data_dict['bevmap_dynamic'])
 
     def post_process(self, batch_dict):
         out_dict = {}
@@ -533,7 +576,10 @@ class BaseDataset(Dataset):
             elif key in ['target_semantic']:
                 ret[key] = torch.from_numpy(np.concatenate(val, axis=0)).long()
             elif key in ['bevmap_static', 'bevmap_dynamic']:
-                ret[key] = torch.from_numpy(np.stack(val, axis=0)).float()
+                if isinstance(val[0], np.ndarray):
+                    ret[key] = torch.from_numpy(np.stack(val, axis=0)).float()
+                else:
+                    ret[key] = torch.stack(val, dim=0).float()
             else:
                 ret[key] = val
         ret['coords'] = torch.cat([ret.pop('coords_idx').view(-1, 1), ret['coords']], dim=-1)

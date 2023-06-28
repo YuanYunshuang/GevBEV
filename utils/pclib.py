@@ -28,7 +28,7 @@ def rotate_points_along_z(points, angle):
         [cosa,  sina, 0],
         [-sina, cosa, 0],
         [0, 0, 1]
-    ]).astype(np.float)
+    ]).astype(float)
     if points.shape[1]==2:
         points_rot = np.matmul(points, rot_matrix[:2, :2])
     elif points.shape[1]>2:

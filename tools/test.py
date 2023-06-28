@@ -1,7 +1,7 @@
 import argparse
 import os, tqdm, time, glob
 
-import torch
+import torch.multiprocessing as mp
 
 from model import get_model
 from dataset import get_dataloader
@@ -11,6 +11,7 @@ from config import load_yaml
 
 
 def test(cfgs, args, n=0):
+    mp.set_start_method('spawn')
     seed_everything(1234)
     device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
 
@@ -47,8 +48,11 @@ def test(cfgs, args, n=0):
 
     # load models
     test_dataloader = get_dataloader(cfgs['DATASET'], mode='test',)
-    post_processor = test_dataloader.dataset.post_process
     model = get_model(cfgs['MODEL']).to(device)
+
+    # prepare post processor
+    test_dataloader.dataset.post_processes.set_vis_dir(out_img_dir)
+    post_processor = test_dataloader.dataset.post_process
 
     # load checkpoint
     ckpt = torch.load(os.path.join(log_dir, 'last.pth'))

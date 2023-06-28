@@ -1,0 +1,20 @@
+
+postprocessors:
+  args:
+    DistributionPostProcess:
+      edl: false
+      lidar_range: &lr [-102.4, -38.4, -5, 102.4, 38.4, 3]
+      voxel_size: &voxel_size [0.2, 0.2, 0.2]
+      visualization: false
+      stride:
+        object: 2
+      distr_r:
+        object: 1.0
+  test: [ 'DistributionPostProcess' ]
+
+vis_function: false
+metrics:
+  MetricDynamicIou:
+    lidar_range: *lr
+    voxel_size: *voxel_size
+    stride: 2
