@@ -305,8 +305,8 @@ def draw_sample_prob(centers, reg, samples, res, distr_r, lr, batch_size, var0):
     centers_map = torch.ones((batch_size, grid_size[0], grid_size[1]),
                               device=reg.device).long() * -1
     ctridx = metric2indices(centers, res).T
-    ctridx[1] += grid_size[0]
-    ctridx[2] += grid_size[1]
+    ctridx[1] -= round(lr[0] / res)
+    ctridx[2] -= round(lr[1] / res)
     centers_map[ctridx[0], ctridx[1], ctridx[2]] = torch.arange(ctridx.shape[1],
                                                                 device=ctridx.device)
 

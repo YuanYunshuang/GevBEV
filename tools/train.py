@@ -31,7 +31,7 @@ def train(cfgs, args):
         log_path = cfgs['TRAIN']['log_dir']
         ckpt = torch.load(os.path.join(log_path, 'last.pth'))
         load_model_dict(model, ckpt['model_state_dict'])
-        epoch_start = cfgs['TRAIN'].get('start_epoch', 0)
+        epoch_start = ckpt.get('epoch', 0)
         # iteration = ckpt['iteration']
         # optimizer.load_state_dict(ckpt['optimizer_state_dict'])
     else:

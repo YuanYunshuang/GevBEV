@@ -18,13 +18,13 @@ TRAIN:
 DATASET:
   name: OpV2V
   path: "/koko/v2vreal"
-  visualize: true
+  visualize: false
   load_all: false
   max_cav: 7
   com_range: 70
   bev_res: &bev_res 0.2 # resolution of gt bev map
   load_camera: false
-  loc_err_flag: true
+  loc_err_flag: false
   loc_err_t_std: 0.2
   loc_err_r_std: 0.2
 
@@ -113,6 +113,7 @@ MODEL:
       distr_r: 2.0 # in meter
       var0: [ 0.1, 0.1 ]
       annealing_step: 50
+      cpm_option: 'none' # 'none', 'all', 'road'
     convs:
       p2:
         kernels: [5, 5, 3] # receiptive field: 2.0m

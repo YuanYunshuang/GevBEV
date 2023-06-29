@@ -39,18 +39,27 @@ class EviGausBEV(BEVBase):
         evidence, obs_mask = self.get_evidence_map(probs_weighted, ctrs)
         unc, conf = self.evidence_to_conf_unc(evidence)
 
-        # grid_size = int(self.det_r / self.res * 2)
-        # s = batch_dict['bevmap_static'].shape[2] // grid_size
-        # cared_mask = batch_dict['bevmap_static'][:, ::s, ::s].bool()
-        cared_mask = batch_dict['distr_conv_out'][f'p{self.stride}']['obs_mask']
-        cared_mask = torch.ones_like(cared_mask).bool()
-        evidence_cpm, Nall, Nsel = self.get_cpm_map(
-            batch_dict['num_cav'], unc, conf, cared_mask, batch_dict
-        )
+        if getattr(self, 'cpm_option', 'none') == 'none':
+            evidence_fused = evidence
+            Nall, Nsel = None, None
+        else:
+            if getattr(self, 'cpm_option', 'none') == 'road':
+                assert batch_dict['bevmap_static'] is not None, 'gt road bev is not available.'
+                sx, sy = batch_dict['bevmap_static'].shape[1:3]
+                sx = sx // self.grid_size[0]
+                sy = sy // self.grid_size[1]
+                cared_mask = batch_dict['bevmap_static'][:, ::sx, ::sy].bool()
+            elif getattr(self, 'cpm_option', 'none') == 'all':
+                cared_mask = batch_dict['distr_conv_out'][f'p{self.stride}']['obs_mask']
+                cared_mask = torch.ones_like(cared_mask).bool()
 
-        ego_idx = [sum(batch_dict['num_cav'][:i]) for i in range(len(batch_dict['num_cav']))]
-        evidence_ego = evidence[ego_idx]
-        evidence_fused = evidence_ego + evidence_cpm
+            evidence_cpm, Nall, Nsel = self.get_cpm_map(
+                batch_dict['num_cav'], unc, conf, cared_mask, batch_dict
+            )
+
+            ego_idx = [sum(batch_dict['num_cav'][:i]) for i in range(len(batch_dict['num_cav']))]
+            evidence_ego = evidence[ego_idx]
+            evidence_fused = evidence_ego + evidence_cpm
 
         self.out['evidence'] = evidence_fused
         self.out['Nall'] = Nall
@@ -59,25 +68,29 @@ class EviGausBEV(BEVBase):
 
     def get_evidence_map(self, probs_weighted, coor):
         voxel_new = coor[:, 1:].view(-1, 1, 2) + self.nbrs
-        # TODO
-        size = self.size
-        xy = (torch.floor(voxel_new / self.res) + size).view(-1, 2)
-        mask = torch.logical_and(xy >= 0, xy < (size * 2)).all(dim=1)
-        xy = xy[mask]
+        # convert metric voxel points to map indices
+        x = (torch.floor(voxel_new[..., 0] / self.res) + self.offset_sz_x)
+        y = (torch.floor(voxel_new[..., 1] / self.res) + self.offset_sz_y)
         batch_indices = (torch.ones_like(probs_weighted[:, :, 0]) * coor[:, :1]).view(-1)
+        mask = (x >= 0) & (x < self.size_x) & (y >= 0) & (y < self.size_y)
+        x, y = x[mask], y[mask]
         batch_indices = batch_indices[mask]
-        indices = batch_indices * (size * 2) ** 2 + xy[:, 0] * (size * 2) + xy[:, 1]
+
+        # copy sparse probs to the dense evidence map
+        indices = batch_indices * self.size_x * self.size_y + x * self.size_x + y
         batch_size = coor[:, 0].max().int() + 1
         probs_weighted = probs_weighted.view(-1, 2)[mask]
-        evidence = torch.zeros((batch_size, size * 2, size * 2, 2),
+        evidence = torch.zeros((batch_size, self.size_x, self.size_y, 2),
                                device=probs_weighted.device).view(-1, 2)
         torch_scatter.scatter(probs_weighted, indices.long(),
                               dim=0, out=evidence, reduce='sum')
-        evidence = evidence.view(batch_size, size * 2, size * 2, 2)
+        evidence = evidence.view(batch_size, self.size_x, self.size_y, 2)
+
+        # create observation mask
         obs_mask = torch.zeros_like(evidence[..., 0]).view(-1)
         obs = indices.unique().long()
         obs_mask[obs] = 1
-        obs_mask = obs_mask.view(batch_size, size * 2, size * 2).bool()
+        obs_mask = obs_mask.view(batch_size, self.size_x, self.size_y).bool()
         return evidence, obs_mask
 
     def get_cpm_map(self, num_cav, unc, evidence, cared_mask, batch_dict=None):
@@ -211,7 +224,10 @@ class EviGausBEV(BEVBase):
 
         evidence = draw_sample_prob(self.centers[:, :3],
                                     self.out['reg'].relu(),
-                                    tgt_pts, self.res, self.distr_r, self.det_r,
+                                    tgt_pts,
+                                    self.res,
+                                    self.distr_r,
+                                    self.lidar_range,
                                     batch_dict['batch_size'],
                                     var0=self.var0)
         epoch_num = batch_dict.get('epoch', 0)

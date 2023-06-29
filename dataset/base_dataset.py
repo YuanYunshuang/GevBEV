@@ -117,7 +117,7 @@ class BaseDataset(Dataset):
             'bevmap_dynamic': data_dict.get('bevmap_dynamic', None),
         }
 
-    @print_exec_time
+    # @print_exec_time
     def sample_bev_pts(self, data_dict):
         """
         Sample BEV points based on bev map and lidar points.
@@ -361,7 +361,7 @@ class BaseDataset(Dataset):
         data_dict['lidar'] = lidar
         return data_dict
 
-    @print_exec_time
+    # @print_exec_time
     def add_free_space_points(self, data_dict):
         # transform lidar points from ego to local, and to torch tensor to speed up runtime
         device = self.device
