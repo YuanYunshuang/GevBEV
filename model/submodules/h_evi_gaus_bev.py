@@ -69,20 +69,20 @@ class EviGausBEV(BEVBase):
     def get_evidence_map(self, probs_weighted, coor):
         voxel_new = coor[:, 1:].view(-1, 1, 2) + self.nbrs
         # convert metric voxel points to map indices
-        x = (torch.floor(voxel_new[..., 0] / self.res) + self.offset_sz_x)
-        y = (torch.floor(voxel_new[..., 1] / self.res) + self.offset_sz_y)
-        batch_indices = (torch.ones_like(probs_weighted[:, :, 0]) * coor[:, :1]).view(-1)
+        x = (torch.floor(voxel_new[..., 0] / self.res) - self.offset_sz_x).long()
+        y = (torch.floor(voxel_new[..., 1] / self.res) - self.offset_sz_y).long()
+        batch_indices = (torch.ones_like(probs_weighted[:, :, 0]) * coor[:, :1]).long()
         mask = (x >= 0) & (x < self.size_x) & (y >= 0) & (y < self.size_y)
         x, y = x[mask], y[mask]
         batch_indices = batch_indices[mask]
 
         # copy sparse probs to the dense evidence map
-        indices = batch_indices * self.size_x * self.size_y + x * self.size_x + y
-        batch_size = coor[:, 0].max().int() + 1
-        probs_weighted = probs_weighted.view(-1, 2)[mask]
+        indices = batch_indices * self.size_x * self.size_y + x * self.size_y + y
+        batch_size = coor[:, 0].max().int().item() + 1
+        probs_weighted = probs_weighted[mask].view(-1, 2)
         evidence = torch.zeros((batch_size, self.size_x, self.size_y, 2),
                                device=probs_weighted.device).view(-1, 2)
-        torch_scatter.scatter(probs_weighted, indices.long(),
+        torch_scatter.scatter(probs_weighted, indices,
                               dim=0, out=evidence, reduce='sum')
         evidence = evidence.view(batch_size, self.size_x, self.size_y, 2)
 

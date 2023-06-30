@@ -32,19 +32,19 @@ def test(cfgs, args, n=0):
             metrics_instances.append(metric_cls(cfgs['TEST']['metrics'][metric_name],
                                                 log_dir, logger, name=f'test{n}'))
 
-    outfiles = glob.glob(os.path.join(out_inf_dir, '*.pth'))
-    i = 0
-    if len(outfiles) > 0:
-        for f in tqdm.tqdm(outfiles):
-            # if i > 20:
-            #     break
-            out_dict = torch.load(f)
-            i += 1
-            for metric in metrics_instances:
-                metric.add_samples(out_dict)
-        for metric in metrics_instances:
-            metric.summary()
-        return
+    # outfiles = glob.glob(os.path.join(out_inf_dir, '*.pth'))
+    # i = 0
+    # if len(outfiles) > 0:
+    #     for f in tqdm.tqdm(outfiles):
+    #         # if i > 20:
+    #         #     break
+    #         out_dict = torch.load(f)
+    #         i += 1
+    #         for metric in metrics_instances:
+    #             metric.add_samples(out_dict)
+    #     for metric in metrics_instances:
+    #         metric.summary()
+    #     return
 
     # load models
     test_dataloader = get_dataloader(cfgs['DATASET'], mode='test',)
@@ -55,7 +55,11 @@ def test(cfgs, args, n=0):
     post_processor = test_dataloader.dataset.post_process
 
     # load checkpoint
-    ckpt = torch.load(os.path.join(log_dir, 'last.pth'))
+    ckpt_file = os.path.join(log_dir, f"epoch{cfgs['TRAIN']['max_epoch']-1}.pth")
+    if not os.path.exists(ckpt_file):
+        ckpt_file = os.path.join(log_dir, 'last.pth')
+    ckpt = torch.load(ckpt_file)
+    logger.write(f"Loaded checkpoint: {ckpt_file}")
     load_model_dict(model, ckpt['model_state_dict'])
     model.eval()
 

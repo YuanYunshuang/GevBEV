@@ -48,7 +48,7 @@ DATASET:
     y: *y
     z: *z
 
-  augmentation: false
+  augmentation: true
   preprocessors:
     args:
       DimensionlessCoordinates:
@@ -130,10 +130,10 @@ MODEL:
 TEST:
   vis_function: false
   metrics:
-    MetricStaticIou: none
     MetricDynamicIou:
       lidar_range: *lr
       voxel_size: *voxel_size
+      stride: 2
 
 
 
