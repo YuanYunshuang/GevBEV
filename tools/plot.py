@@ -1,3 +1,5 @@
+import glob
+
 import matplotlib.pyplot as plt
 import numpy as np
 import os
@@ -111,10 +113,56 @@ def cpm(head='obj'):
 
 
 
+def compare(test_dir1, test_dir):
+    pass
+
+
+def load_result(filename):
+    iou_all = []
+    with open(filename, 'r') as fh:
+        for line in fh.readlines():
+            if 'iou all' in line:
+                iou_all.append(float(line.strip().split(' ')[-1]))
+    return iou_all
+
+
+def pose_err(test_dir):
+    files = glob.glob(os.path.join(test_dir, 'test*', 'result.txt'))
+    res_with_err = np.zeros((6, 11, 2))
+    for f in files:
+        test_name = f.split('/')[-2].replace('test', '').split('-')
+        if len(test_name) == 1:
+            t_std = 0
+            r_std = 0
+        else:
+            t_std = int(test_name[0])
+            r_std = int(test_name[1])
+
+        iou_all = load_result(f)
+        res_with_err[t_std, r_std, 0] = iou_all[0]
+        if len(iou_all) == 2:
+            res_with_err[t_std, r_std, 1] = iou_all[1]
+
+    # loc err
+    xs_loc = np.arange(6) * 0.1
+    plt.plot(xs_loc, res_with_err[:, 0, 0])  # road
+    plt.plot(xs_loc, res_with_err[:, 0, 1])  # object
+    plt.savefig(os.path.join(test_dir, "loc_err.png"))
+    plt.close()
+
+    # rot err
+    xs_rot = np.arange(11) * 0.1
+    plt.plot(xs_rot, res_with_err[0, :, 0])  # road
+    plt.plot(xs_rot, res_with_err[0, :, 1])  # object
+    plt.savefig(os.path.join(test_dir, "rot_err.png"))
+    plt.close()
+
+
 # prc('surface')
 # prc('object')
 # unc_q('surface')
 # unc_q('object')
-cpm('sur')
-cpm('obj')
-
+# cpm('sur')
+# cpm('obj')
+pose_err("/mars/projects20/evibev_exp/opv2v/evigausbev")
+# load_result("/mars/projects20/evibev_exp/opv2v/evigausbev/test0-3/result.txt")

@@ -299,7 +299,7 @@ class MetricBevbase(Metric):
         ious = []
         for thr in self.thrs:
             pos_mask = torch.argmax(conf, dim=-1).bool()
-            pos_mask = torch.logical_and(pos_mask, unc < thr)
+            pos_mask = torch.logical_and(pos_mask, unc <= thr)
             mi = torch.logical_and(pos_mask, gt_bev).sum()
             mu = torch.logical_or(pos_mask, gt_bev).sum()
             ious.append(mi / mu)
@@ -312,7 +312,7 @@ class MetricBevbase(Metric):
         ious = []
         for thr in self.thrs:
             pos_mask = torch.argmax(conf[obs_mask], dim=-1).bool()
-            unc_mask = unc[obs_mask] < thr
+            unc_mask = unc[obs_mask] <= thr
             pos_mask = torch.logical_and(pos_mask, unc_mask)
             gt = gt_bev[obs_mask]
             mi = torch.logical_and(pos_mask, gt).sum()
@@ -435,7 +435,7 @@ class MetricBevbase(Metric):
         ious_obs = torch.stack(self.result['iou_obs'], dim=0).mean(dim=0) * 100
 
         # self.pr_curve(f"{self.filename_prefix}_prc.png")
-        self.unc_Q(f"{self.filename_prefix}_unc_q.png")
+        # self.unc_Q(f"{self.filename_prefix}_unc_q.png")
         # self.conf_Q(f"{self.filename_prefix}_conf_q.png")
 
         self.result_dict = {
@@ -459,7 +459,7 @@ class MetricBevbase(Metric):
         pass
 
     def format_str(self, result_dict):
-        ss = "==================================================================================\n"
+        ss = "\n" + self.filename_prefix + "\n" + "=" * (23 + 70) + "\n"
         for k, vs in result_dict.items():
             if isinstance(vs, int):
                 continue
@@ -470,7 +470,6 @@ class MetricBevbase(Metric):
                 s2 = "  ".join([f"{v:4.1f} " for v in vs]) + "\n"
             ss += s1 + s2
         return ss
-
 
 
 class MetricStaticIou(MetricBevbase):
@@ -489,7 +488,8 @@ class MetricStaticIou(MetricBevbase):
                      out_dict['cared_mask'],
                      out_dict['road_obs_mask'])
         self.add_aux_data(out_dict)
-        self.cpm_cnt(out_dict['road_Nall'], out_dict['road_Nsel'])
+        if out_dict['box_Nsel'] is not None:
+            self.cpm_cnt(out_dict['road_Nall'], out_dict['road_Nsel'])
 
     def add_aux_data(self, out_dict):
         obs_mask = out_dict['road_obs_mask']
@@ -538,11 +538,20 @@ class MetricDynamicIou(MetricBevbase):
             self.cpm_cnt(out_dict['box_Nall'], out_dict['box_Nsel'])
 
     def remove_ego_box(self, out_dict):
+        """Remove the influence of ego box for evaluation.
+        In some cases, there is no lidar points of ego car detected,
+        and our model does not make estimations over unobserved areas,
+        so it is unfair to evaluate over this area.
+        """
         mask = torch.norm(out_dict[f'gt_boxes'][:, 1:3], dim=-1) > 1
-        gt_box_dim = out_dict['gt_boxes'][torch.logical_not(mask), 4:6].mean(dim=0)
+        if mask.all():
+            # omit this operation if ego box does not exist
+            return
+        # get ego box dimension
+        ego_box_dim = out_dict['gt_boxes'][torch.logical_not(mask), 4:6].mean(dim=0)
         sx, sy = out_dict['box_bev_unc'].shape[1:]
         res = (self.lidar_range[3] - self.lidar_range[0]) / sx
-        inds = (gt_box_dim / res / 2).int()
+        inds = (ego_box_dim / res / 2).int()
         out_dict['box_bev_unc'][:, sx - inds[0].item():sx + inds[0].item(),
         sy - inds[1].item():sy + inds[1].item()] = 0.0
         if out_dict['box_obs_mask'] is not None:

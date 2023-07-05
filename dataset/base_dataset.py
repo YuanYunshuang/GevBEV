@@ -14,6 +14,7 @@ from utils.pclib import rotate_points_along_z
 from utils.box_utils import limit_period
 from utils.vislib import draw_points_boxes_plt, draw_img
 from utils.misc import print_exec_time
+from ops.utils import points_in_boxes_cpu
 
 
 class BaseDataset(Dataset):
@@ -91,6 +92,7 @@ class BaseDataset(Dataset):
         if self.cfgs.get('loc_err_flag', False):
             data_dict = self.add_loc_err(data_dict)
         data_dict = self.crop_points_range(data_dict)
+        data_dict = self.remove_empty_boxes(data_dict)
         data_dict = self.positive_z(data_dict)
         coords, features = self.compose_coords_features(self.cfgs['voxel']['coords'],
                                                         self.cfgs['voxel']['features'],
@@ -116,6 +118,15 @@ class BaseDataset(Dataset):
             'bevmap_static': data_dict.get('bevmap_static', None),
             'bevmap_dynamic': data_dict.get('bevmap_dynamic', None),
         }
+
+    def remove_empty_boxes(self, data_dict):
+        point_indices = points_in_boxes_cpu(
+            data_dict['lidar'][:, :3],
+            data_dict['boxes']
+        )
+        n_pts = point_indices.sum(axis=1)
+        data_dict['boxes'] = data_dict['boxes'][n_pts > 3]
+        return data_dict
 
     # @print_exec_time
     def sample_bev_pts(self, data_dict):
@@ -169,7 +180,7 @@ class BaseDataset(Dataset):
             is_static = bevmap_static[xs, ys] > 0
             labels[is_static, 0] = 1   # 1st col. --> static label
             is_pos = torch.logical_or(is_dynamic, is_static)
-            static_idx = torch.where(is_static)
+            static_idx = torch.where(is_static)[0]
             if len(static_idx) > 3000:
                 # only sample <=3000 static
                 static_idx = static_idx[torch.randperm(len(static_idx))[:3000]]
@@ -253,14 +264,27 @@ class BaseDataset(Dataset):
     def add_loc_err(self, data_dict):
         """Add loc noise to cav"""
         tf_matrices = data_dict['tf_matrices']
-        xyz_noise = np.random.normal(0, self.cfgs['loc_err_t_std'], 3)
-        rot_noise = np.random.normal(0, self.cfgs['loc_err_r_std'], 3)
-        rot_noise[:2] = 0
-        noise_pose = np.eye(4)
-        rot_mat = R.from_euler('xyz', rot_noise, degrees=True).as_matrix()
-        noise_pose[:3, :3] = rot_mat @ tf_matrices[1, :3, :3]
-        noise_pose[:3, 3] = tf_matrices[1, :3, 3] + xyz_noise
-        tf_matrices[1] = noise_pose
+
+        lidar = data_dict['lidar']
+        lidar_idx = data_dict['lidar_idx']
+
+        for i in range(len(tf_matrices[1:])):
+            loc_noise = np.random.normal(0, self.cfgs['loc_err_t_std'], 3)
+            rot_noise = np.random.normal(0, self.cfgs['loc_err_r_std'], 3)
+            rot_noise[:2] = 0
+            rot_noise = np.deg2rad(rot_noise)
+            # loc_noise[2] = 0
+            noise_pose = np.eye(4)
+            rot_mat = R.from_euler('xyz', rot_noise, degrees=True).as_matrix()
+            noise_pose[:3, :3] = rot_mat @ tf_matrices[i + 1, :3, :3]
+            noise_pose[:3, 3] = tf_matrices[i + 1, :3, 3] + loc_noise
+            tf_matrices[i + 1] = noise_pose
+            mask = lidar_idx == i + 1
+            cur_lidar = lidar[mask]
+            cur_lidar = rotate_points_along_z(cur_lidar, rot_noise[2])
+            cur_lidar[:, :3] = cur_lidar[:, :3] + loc_noise.reshape(1, 3)
+            lidar[mask] = cur_lidar
+        data_dict['lidar'] = lidar
         return data_dict
 
     def crop_points_by_features(self, features):
@@ -365,9 +389,9 @@ class BaseDataset(Dataset):
     def add_free_space_points(self, data_dict):
         # transform lidar points from ego to local, and to torch tensor to speed up runtime
         device = self.device
-        lidar = torch.from_numpy(data_dict['lidar']).to(device)
-        lidar_idx = torch.from_numpy(data_dict['lidar_idx']).to(device)
-        tf_matrices = torch.from_numpy(data_dict['tf_matrices']).to(device)
+        lidar = torch.from_numpy(data_dict['lidar']).to(device).float()
+        lidar_idx = torch.from_numpy(data_dict['lidar_idx']).to(device).float()
+        tf_matrices = torch.from_numpy(data_dict['tf_matrices']).to(device).float()
         lidar_idx, lidar = self.lidar_transform(lidar, lidar_idx, tf_matrices)
         # get point lower than z_min=1.5m
         z_min = self.cfgs['free_space_h']

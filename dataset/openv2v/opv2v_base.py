@@ -1,7 +1,9 @@
 import os
 import os.path as osp
+
+import cv2
 from collections import OrderedDict
-from PIL import Image
+
 from dataset.base_dataset import BaseDataset
 from dataset.openv2v.utils import *
 
@@ -83,8 +85,11 @@ class OpV2VBase(BaseDataset):
                                           scenario_folder, cav_id, timestamp
                                           + '_bev_road.png')
                     if osp.exists(bevmap_file):
-                        self.scenario_database[i][cav_id][timestamp]['bevmap'] = \
+                        self.scenario_database[i][cav_id][timestamp]['bev_map'] = \
                             bevmap_file
+                    elif osp.exists(bevmap_file.replace('road', 'map')):
+                        self.scenario_database[i][cav_id][timestamp]['bev_map'] = \
+                        bevmap_file.replace('road', 'map')
 
                     if self.cfgs['load_camera']:
                         camera_files = self.load_camera_files(cav_path, timestamp)
@@ -219,10 +224,9 @@ class OpV2VBase(BaseDataset):
                     np.loadtxt(lidar_file, skiprows=11).reshape(-1, 4)
             else:
                 raise NotImplementedError
-            if cav_content['ego'] and 'bev_map' in data[cav_id]:
+            if cav_content['ego'] and 'bev_map' in cav_content[timestamp_key]:
                 data[cav_id]['bev_map'] = \
-                    Image.open(cav_content[timestamp_key
-                               ]['bevmap']).__array__()[::-1, :]
+                    cv2.imread(cav_content[timestamp_key]['bev_map'])[::-1, :, ::-1].copy()
             if self.cfgs['load_camera']:
                 pass # todo: load camera
 

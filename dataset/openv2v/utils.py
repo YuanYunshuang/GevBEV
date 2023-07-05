@@ -18,7 +18,6 @@ def check_numpy_to_torch(x):
     return x, False
 
 
-
 def dist_two_pose(cav_pose, ego_pose):
     """
     Calculate the distance between agent by given there pose.

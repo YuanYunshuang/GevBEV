@@ -1,8 +1,6 @@
 import argparse
 import os, tqdm, time, glob
 
-import torch.multiprocessing as mp
-
 from model import get_model
 from dataset import get_dataloader
 from utils import misc, metrics
@@ -11,7 +9,6 @@ from config import load_yaml
 
 
 def test(cfgs, args, n=0):
-    mp.set_start_method('spawn')
     seed_everything(1234)
     device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
 
@@ -32,22 +29,24 @@ def test(cfgs, args, n=0):
             metrics_instances.append(metric_cls(cfgs['TEST']['metrics'][metric_name],
                                                 log_dir, logger, name=f'test{n}'))
 
-    # outfiles = glob.glob(os.path.join(out_inf_dir, '*.pth'))
-    # i = 0
-    # if len(outfiles) > 0:
-    #     for f in tqdm.tqdm(outfiles):
-    #         # if i > 20:
-    #         #     break
-    #         out_dict = torch.load(f)
-    #         i += 1
-    #         for metric in metrics_instances:
-    #             metric.add_samples(out_dict)
-    #     for metric in metrics_instances:
-    #         metric.summary()
-    #     return
+    # load dataset
+    test_dataloader = get_dataloader(cfgs['DATASET'], mode='test', use_cuda=args.cuda_loader)
 
-    # load models
-    test_dataloader = get_dataloader(cfgs['DATASET'], mode='test',)
+    # check if test result already exists
+    outfiles = glob.glob(os.path.join(out_inf_dir, '*.pth'))
+    if len(outfiles) == len(test_dataloader):
+        i = 0
+        if len(outfiles) > 0:
+            for f in tqdm.tqdm(outfiles):
+                out_dict = torch.load(f)
+                i += 1
+                for metric in metrics_instances:
+                    metric.add_samples(out_dict)
+            for metric in metrics_instances:
+                metric.summary()
+            return
+
+    # load model
     model = get_model(cfgs['MODEL']).to(device)
 
     # prepare post processor
@@ -55,31 +54,31 @@ def test(cfgs, args, n=0):
     post_processor = test_dataloader.dataset.post_process
 
     # load checkpoint
-    ckpt_file = os.path.join(log_dir, f"epoch{cfgs['TRAIN']['max_epoch']-1}.pth")
-    if not os.path.exists(ckpt_file):
-        ckpt_file = os.path.join(log_dir, 'last.pth')
+    # ckpt_file = os.path.join(log_dir, f"epoch{cfgs['TRAIN']['max_epoch']-1}.pth")
+    # if not os.path.exists(ckpt_file):
+    ckpt_file = os.path.join(log_dir, 'last.pth')
     ckpt = torch.load(ckpt_file)
     logger.write(f"Loaded checkpoint: {ckpt_file}")
     load_model_dict(model, ckpt['model_state_dict'])
     model.eval()
 
-
-
-    result = []
     batch_idx = 0
     with torch.no_grad():
         model.eval()
         for batch_data in tqdm.tqdm(test_dataloader):
             batch_idx += 1
-            # if batch_idx > 3:
-            #     break
-            load_tensors_to_gpu(batch_data)
-            # Forward pass
-            model(batch_data)
-            # loss_dict = model.loss(batch_data)
-            # result.append(loss_dict)
-            out_dict = post_processor(batch_data)
-            # torch.save(out_dict, os.path.join(log_dir, f'test{n}', 'inf', f"{batch_idx}.pth"))
+            out_file = os.path.join(out_inf_dir, f"{batch_idx}.pth")
+            if os.path.exists(out_file):
+                out_dict = torch.load(out_file)
+            else:
+                load_tensors_to_gpu(batch_data)
+                # Forward pass
+                model(batch_data)
+                # loss_dict = model.loss(batch_data)
+                # result.append(loss_dict)
+                out_dict = post_processor(batch_data)
+                torch.save(out_dict, out_file)
+
             for metric in metrics_instances:
                 metric.add_samples(out_dict)
 

@@ -54,6 +54,12 @@ class OpV2VDataset(OpV2VBase):
         else:
             bev_map_dynamic = self.get_dynamic_bev_map(boxes, 'lwh')
             bev_map_static = None
+            # save bev_map
+            # img = np.zeros(bev_map_dynamic.shape[:2] + (3,), dtype=np.int8)
+            # img[:, :, 1] = bev_map_dynamic
+            # filename = os.path.join(self.cfgs['path'], self.mode, data_dict['scenario'],
+            #                         str(data_dict['object_ids'][0]), f"{data_dict['timestamp']}_bev_map.jpg")
+            # cv2.imwrite(filename, img)
 
         return {
             'frame_id': (data_dict['scenario'], data_dict['timestamp']),
@@ -89,9 +95,13 @@ if __name__ == '__main__':
     import argparse
     from config import load_yaml
     parser = argparse.ArgumentParser()
-    parser.add_argument("--config", type=str, default="config/minkunet_evibev_v2v4real.yaml")
+    parser.add_argument("--config", type=str, default="config/minkunet_evigausbev_opv2v.yaml")
     args = parser.parse_args()
     cfg = load_yaml(args)
+    cfg['DATASET']['visualize'] = True
+    cfg['DATASET']['loc_err_flag'] = True
+    cfg['DATASET']['loc_err_t_std'] = 0.5
+    cfg['DATASET']['loc_err_r_std'] = 0.0
     dataset = OpV2VDataset(cfg['DATASET'], mode='test', use_cuda=True)
     dataloader = torch.utils.data.DataLoader(dataset,
                                              batch_size=1,
@@ -102,8 +112,8 @@ if __name__ == '__main__':
     for batch in dataset:
         print(i)
         i += 1
-        if i > 5:
-            break
+        # if i > 5:
+        #     break
 
-    dataset.add_free_space_points.get_mean_runtime()
-    dataset.sample_bev_pts.get_mean_runtime()
+    # dataset.add_free_space_points.get_mean_runtime()
+    # dataset.sample_bev_pts.get_mean_runtime()

@@ -76,28 +76,33 @@ class DistributionPostProcess(object):
 
         self.n_sam_per_dim = 29
         self.unit_box_template = meshgrid(
-            -1.4, 1.4, dim=2, n_steps=self.n_sam_per_dim
-        ).view(1, self.n_sam_per_dim, self.n_sam_per_dim, 2).cuda()
+            -1.4, 1.4, dim=2, n_steps=self.n_sam_per_dim,
+        ).view(1, self.n_sam_per_dim,
+               self.n_sam_per_dim, 2).float().cuda()
 
         self.out = {}
 
     def __call__(self, batch_dict):
         self.out = {'frame_id': batch_dict['frame_id'],}
-        if 'distr_surface' in batch_dict:
+        if 'distr_surface' in batch_dict and \
+                batch_dict['distr_surface']['evidence'] is not None:
             self.surface(batch_dict)
-        if 'distr_object' in batch_dict:
+        if 'distr_object' in batch_dict and \
+                batch_dict['distr_object']['evidence'] is not None:
             self.object(batch_dict)
         if self.vis:
             self.visualization(batch_dict)
 
     def surface(self, batch_dict):
         res = self.voxel_size * self.stride['surface']
-        grid_size = int(self.det_r / res * 2)
+        sx = round((self.lidar_range[3] - self.lidar_range[0]) / res)
+        sy = round((self.lidar_range[4] - self.lidar_range[1]) / res)
         evidence = batch_dict['distr_surface']['evidence']
         obs_mask = batch_dict['distr_surface']['obs_mask']
 
-        s = batch_dict['bevmap_static'].shape[2] // grid_size
-        road_bev = batch_dict['bevmap_static'][:, ::s, ::s].bool()
+        stridex = batch_dict['bevmap_static'].shape[1] // sx
+        stridey = batch_dict['bevmap_static'].shape[2] // sy
+        road_bev = batch_dict['bevmap_static'][:, ::stridex, ::stridey].bool()
 
         conf, unc = self.evidence_to_conf_unc(evidence)
 
@@ -147,10 +152,13 @@ class DistributionPostProcess(object):
         })
     
     def visualization(self, batch_dict):
-        points = batch_dict['xyz']
-        num_cav = batch_dict['num_cav'][0]
-        points_idx0 = batch_dict['in_data'].C[:, 0] < num_cav
-        points = points[points_idx0].cpu().numpy()
+        if 'xyz' in batch_dict:
+            points = batch_dict['xyz']
+            num_cav = batch_dict['num_cav'][0]
+            points_idx0 = batch_dict['in_data'].C[:, 0] < num_cav
+            points = points[points_idx0].cpu().numpy()
+        else:
+            points = None
 
         # we only visualize the 1st batch
         fn = '_'.join(self.out['frame_id'][0])
@@ -182,10 +190,10 @@ class DistributionPostProcess(object):
                                      road_bev.astype(bool)).sum()
             iou_road = tp_road / (pos_road.sum() + fn_road) * 100
 
-            bevmap = np.zeros((grid_size, grid_size, 3))
+            bevmap = np.zeros((grid_size[0], grid_size[1], 3))
             bevmap[..., 2] = 255 * confs_np[..., 0]
             bevmap[..., 1] = 255 * confs_np[..., 1]
-            gt_bevmap = np.zeros((grid_size, grid_size, 3))
+            gt_bevmap = np.zeros((grid_size[0], grid_size[1], 3))
             gt_bevmap[..., 1] = road_bev * 255
 
             fig = plt.figure(figsize=(13, 6))
@@ -220,7 +228,8 @@ class DistributionPostProcess(object):
             if road_points is not None:
                 ax.scatter(road_points[:, 0], road_points[:, 1],
                            c=road_points_prob, cmap='hot', s=1, vmin=0, vmax=1)
-            ax.plot(points[:, 0], points[:, 1], '.', markersize=0.5)
+            if points is not None:
+                ax.plot(points[:, 0], points[:, 1], '.', markersize=0.5)
 
             s = 4
             for i, (sam, conf) in enumerate(zip(pred_box_sam, pred_box_conf)):

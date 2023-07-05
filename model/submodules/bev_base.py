@@ -37,7 +37,8 @@ class HBEVBase(nn.Module):
         minkconv_layer = functools.partial(
             minkconv_conv_block, d=2, bn_momentum=0.1,
         )
-        layers = [minkconv_layer(args['in_dim'], 32, args['kernels'][0], 1)]
+        layers = [minkconv_layer(args['in_dim'], 32, args['kernels'][0], 1,
+                                 expand_coordinates=args['expand_coordinates'])]
         for ks in args['kernels'][1:]:
             layers.append(minkconv_layer(32, 32, ks, 1,
                                          expand_coordinates=args['expand_coordinates']))
@@ -260,7 +261,7 @@ class BEVBase(nn.Module):
     def sample_tgt_pts(self, obs_mask, discrete=False):
         tgt_pts = self.centers.clone()
         if not discrete:
-            tgt_pts[:, 1:3] = tgt_pts[:, 1:3] + torch.randn_like(tgt_pts[:, 1:3])
+            tgt_pts[:, 1:3] = tgt_pts[:, 1:3] + torch.randn_like(tgt_pts[:, 1:3]) * 3
         indices, mask = self.pts_to_masked_indices(tgt_pts)
         tgt_pts = tgt_pts[mask]
         mask = obs_mask[indices[:, 0], indices[:, 1], indices[:, 2]]
@@ -318,10 +319,14 @@ class BEVBase(nn.Module):
         #     from utils.vislib import draw_points_boxes_plt
         #     pts = tgt_pts[mask] # [tgt_label[mask]]
         #     draw_points_boxes_plt(
-        #         pc_range=50,
+        #         pc_range=[-102.4, -38.4, -5, 102.4, 38.4, 3],
         #         points=pts[pts[:, 0] == 0, 1:].cpu().numpy(),
         #         boxes_gt=batch_dict['target_boxes'][batch_dict['target_boxes'][:, 0] == 0, 1:]
         #     )
+        #     import matplotlib.pyplot as plt
+        #     plt.imshow(obs_mask[0].T.cpu().numpy()[::-1])
+        #     plt.show()
+        #     plt.close()
         #     raise NotImplementedError
         tgt_label = tgt_label > 0
         return tgt_pts[mask], tgt_label[mask], indices[mask].T

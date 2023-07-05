@@ -1,0 +1,149 @@
+TRAIN:
+#  project_name: 'auto-cosense'
+  wandb_account: 'opheliayuan'
+  log_every: 2
+  max_epoch: 50
+  gpus: 1
+  log_every_n_steps: 10
+  check_val_every_n_epoch: 5
+  resume: true
+  optimizer:
+    lr: 0.001
+    weight_decay: 1e-2
+    betas: [0.95, 0.999]
+    milestones: [20, 45]
+    gamma: 0.1
+
+
+DATASET:
+  name: OpV2V
+  path: "/koko/OPV2V/additional"
+  visualize: false
+  load_all: false
+  max_cav: 2
+  com_range: 45
+  bev_res: &bev_res 0.2 # resolution of gt bev map
+  load_camera: false
+  loc_err_flag: false
+  loc_err_t_std: 0.2
+  loc_err_r_std: 0.2
+
+  voxel:
+    features: 'x,y,z,d,c,s,i' # t:theta, d:depth, z:height, y:euclidean centers., x:euclidean centers., c:class, i:intensity
+    coords: 'x,y,z'
+    resolution: &voxel_size [0.2, 0.2, 0.2] # name:unit [theta: deg, depth: m, zyx: m]
+    xyz_idx: &xyz_idx [0, 1, 2]
+    voxel_feature_dim: &voxel_feature_dim 14 # encoded norm features + xyz
+  crop:
+    x: &x [-50, 50] # z_min, z_max
+    y: &y [-50, 50] # z_min, z_max
+    z: &z [-3, 3] # z_min, z_max
+  lidar_range: &lr [-50, -50, -3, 50, 50, 3]
+  free_space_h: -1.5
+  free_space_d: 6
+  free_space_step: 1.0
+  normalize_features:  # TODO: this is not used, consider removing
+    x: *x
+    y: *y
+    z: *z
+
+  augmentation: true
+  preprocessors:
+    args:
+      DimensionlessCoordinates:
+        voxel_size: *voxel_size
+    train: ['DimensionlessCoordinates']
+    val: ['DimensionlessCoordinates']
+    test: ['DimensionlessCoordinates']
+  postprocessors:
+    args:
+      DistributionPostProcess:
+        lidar_range: *lr
+        voxel_size: *voxel_size
+        visualization: false
+        stride:
+          surface: 2
+          object: 2
+        distr_r:
+          surface: 2.0
+          object: 2.0
+    test: [ 'DistributionPostProcess' ]
+
+  batch_size_train: 8
+  batch_size_val: 2
+  batch_size_test: 2
+  n_workers: 4
+  shuffle: true
+
+MODEL:
+  order: ['mink_unet', 'm_compression', 'h_detection', 'h_evi_bev']
+  mink_unet:
+    in_dim: 14
+    cache: ['p0', 'p2', 'p4']
+#    n_cls: 10
+#    annealing_step: &ann_step 50
+  m_compression:
+#    - p1:
+#        steps: [ 6, 5 ]
+#        channels: [ 32, 64, 32 ]
+    - p2:
+        steps: [ 3, 5 ]
+        channels: [ 64, 64, 64 ]
+    - p4:
+        steps: [ 8 ]
+        channels: [ 64, 64 ]
+
+  h_detection:
+    # stage 1
+    - s1:
+        lidar_range: *lr
+        voxel_size: &vs 0.2
+        stride: 4
+        in_dim: 64
+        box_dim: [ 4.41, 1.98, 1.64 ]         # [l, w, h]
+        box_z: 1.6                          # z of box center
+        box_angles: [ 0, 90 ]                 # in degree
+        iou_match: 0.4
+        iou_unmatch: 0.2
+        sample_size: 512
+    - s2: []
+  h_evi_bev:
+    args:
+      voxel_size: *vs
+      lidar_range: *lr
+      distr_r: 2.0 # in meter
+      var0: [ 0.1, 0.1 ]
+      annealing_step: 50
+      cpm_option: 'none' # 'none', 'all', 'road'
+    convs:
+      p2:
+        kernels: [5, 5, 3] # receiptive field: 2.0m
+        in_dim: 64
+        expand_coordinates: True
+    heads:
+      - h_surface:
+          name: surface
+          stride: 2
+
+      - h_object:
+          name: object
+          stride: 2
+          sampling: road # sample pixels with boxes or road
+
+
+
+TEST:
+  vis_function: false
+  metrics:
+    MetricStaticIou:
+      stride: 2
+    MetricDynamicIou:
+      lidar_range: *lr
+      voxel_size: *voxel_size
+      stride: 2
+
+
+
+
+
+

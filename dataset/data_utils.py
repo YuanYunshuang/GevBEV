@@ -13,6 +13,9 @@ def project_points_by_matrix(points, transformation_matrix, to_torch=False):
         is_numpy = True
     if isinstance(transformation_matrix, np.ndarray):
         transformation_matrix = torch.from_numpy(transformation_matrix).to(points.device)
+    # ensure float
+    points = points.float()
+    transformation_matrix = transformation_matrix.float()
     # convert to homogeneous coordinates via padding 1 at the last dimension.
     # (N, 4)
     points_homogeneous = torch.cat(

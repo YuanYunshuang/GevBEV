@@ -17,13 +17,16 @@ TRAIN:
 
 DATASET:
   name: OpV2V
-  path: "/media/hdd/yuan/koko/data/OPV2V/additional"
+  path: "/koko/OPV2V/additional"
   visualize: false
   load_all: false
   max_cav: 7
   com_range: 45
   bev_res: &bev_res 0.2 # resolution of bev map
   load_camera: false
+  loc_err_flag: false
+  loc_err_t_std: 0.2
+  loc_err_r_std: 0.2
 
   voxel:
     features: 'x,y,z,d,c,s,i' # t:theta, d:depth, z:height, y:euclidean centers., x:euclidean centers., c:class, i:intensity
@@ -40,9 +43,6 @@ DATASET:
   free_space_h: -1.5
   free_space_d: 6
   free_space_step: 1.5
-  normalize_features:
-    dxy: &d [0, 50]
-    z: *z
 
   augmentation: true
   preprocessors:
@@ -57,14 +57,13 @@ DATASET:
       DistributionPostProcess:
         det_r: 50
         voxel_size: *voxel_size
-        vis_dir: /media/hdd/yuan/evibev/logs/opv2v/test/img
         visualization: True
         stride:
-          surface: 2
-          object: 1
+          surface: 2.0
+          object: 2.0
         distr_r:
           surface: 2.0
-          object: 1.0
+          object: 2.0
     test: [ 'DistributionPostProcess' ]
 
   batch_size_train: 8
