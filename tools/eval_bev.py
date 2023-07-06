@@ -218,7 +218,7 @@ if __name__ == "__main__":
     test_dirs = sorted(glob.glob("/mars/projects20/evibev_exp/v2vreal/cobevt_tmp/test*-*"))
     args.data_test_dir = "/koko/v2vreal"
     args.config = "./config/v2vreal_test.yaml"
-    for test_dir in test_dirs:
+    for test_dir in test_dirs[:10]:
         # if test_dir == "/mars/projects20/evibev_exp/v2vreal/cobevt/test0-1":
         #     continue
         print(test_dir)

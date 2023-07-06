@@ -87,8 +87,12 @@ def test(cfgs, args, n=0):
 
 
 if __name__ == "__main__":
+    import torch.multiprocessing as mp
+    mp.set_start_method('spawn')
+
     parser = argparse.ArgumentParser()
-    parser.add_argument("log_dir", type=str, default="../logs")
+    parser.add_argument("--log_dir", type=str, default="../logs")
+    parser.add_argument("--cuda_loader", action="store_true")
     parser.add_argument("--save-img", action="store_true")
     parser.add_argument("--vis-func", type=str) # , default="vis_semantic_unc"
     args = parser.parse_args()

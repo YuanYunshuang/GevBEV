@@ -8,10 +8,12 @@ import argparse, os, shutil
 def try_test(args, exp, visulize=False):
     setattr(args, 'config', os.path.join(args.log_dir, 'config.yaml'))
     cfgs = load_yaml(args)
-    cfgs['DATASET']['loc_err_flag'] = True
-    cfgs['DATASET']['loc_err_flag'] = True
-    cfgs['DATASET']['loc_err_t_std'] = exp[0]
-    cfgs['DATASET']['loc_err_r_std'] = exp[1]
+    if exp.sum() == 0:
+        cfgs['DATASET']['loc_err_flag'] = False
+    else:
+        cfgs['DATASET']['loc_err_flag'] = True
+        cfgs['DATASET']['loc_err_t_std'] = exp[0]
+        cfgs['DATASET']['loc_err_r_std'] = exp[1]
     cfgs['DATASET']['postprocessors']['args']['DistributionPostProcess']['visualization'] = visulize
     test(cfgs, args, f"{exp[0] * 10:.0f}-{exp[1] * 10:.0f}")
 
