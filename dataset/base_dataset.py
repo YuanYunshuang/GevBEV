@@ -131,7 +131,7 @@ class BaseDataset(Dataset):
     # @print_exec_time
     def sample_bev_pts(self, data_dict):
         """
-        Sample BEV points based on bev map and lidar points.
+        Sample BEV points based on bev-opv2v map and lidar points.
         This function can runs on GPU to speed up runtime.
 
         :param data_dict: dict
@@ -165,7 +165,7 @@ class BaseDataset(Dataset):
         if not self.cfgs.get("discrete_bev_pts", False):
             points2d[:, 1:] = points2d[:, 1:] + torch.randn((len(points2d), 2), device=device)
 
-        # retrieve labels from bev maps and downsample is necessary
+        # retrieve labels from bev-opv2v maps and downsample is necessary
         h, w = bevmap_dynamic.shape
         pixels_per_meter = 1 / self.cfgs['bev_res']
         xs = torch.clip(torch.floor((points2d[:, 1] + x_lim) * pixels_per_meter).long(), 0, h - 1)
@@ -189,7 +189,7 @@ class BaseDataset(Dataset):
         sample_idx.append(neg_idx[torch.randperm(len(neg_idx))[:3000]])  # only sample <=3000 negative
 
         sample_idx = torch.cat(sample_idx, dim=0)
-        # bev pts col. attr. (idx, x, y, static_lbl, dynamic_lbl)
+        # bev-opv2v pts col. attr. (idx, x, y, static_lbl, dynamic_lbl)
         bev_points = torch.cat([points2d[sample_idx], labels[sample_idx]], dim=1).cpu().numpy()
 
         data_dict.update({
@@ -326,7 +326,7 @@ class BaseDataset(Dataset):
                 data_dict['pts'] = data_dict['pts'][mask]
                 data_dict['bev_pts_idx'] = data_dict['bev_pts_idx'][mask]
             # after augmentation, in some cavs lidar points are all removed by cropping,
-            # make sure the bev pts for these cavs are also removed
+            # make sure the bev-opv2v pts for these cavs are also removed
             rm_idx = set(np.unique(data_dict['bev_pts_idx'])) - set(np.unique(lidar_idx))
             for i in rm_idx:
                 mask = data_dict['bev_pts_idx'] == i
@@ -403,7 +403,8 @@ class BaseDataset(Dataset):
         d = torch.norm(points[:, :2], dim=1).reshape(-1, 1)
         free_space_d = self.cfgs.get('free_space_d', 3)
         free_space_step = self.cfgs.get('free_space_step', 1)
-        delta_d = torch.arange(1, free_space_d, free_space_step,
+        delta_d = torch.arange(1, free_space_d + free_space_step,
+                               free_space_step,
                                device=device).reshape(1, -1)
         steps = delta_d.shape[1]
         tmp = (d - delta_d) / d  # Nxsteps
@@ -416,7 +417,8 @@ class BaseDataset(Dataset):
         # 3.remove duplicated points with resolution 1m
         ixyz = ixyz[tmp > 0]
         ixyz = ixyz[ixyz[..., 3] < z_min]
-        selected = torch.unique(torch.floor(ixyz).long(), return_inverse=True, dim=0)[1]
+        ixyz = ixyz[torch.randperm(len(ixyz))]
+        selected = torch.unique(torch.floor(ixyz * 2.5).long(), return_inverse=True, dim=0)[1]
         ixyz = ixyz[torch.unique(selected)]
 
         # pad free space point intensity as -1
@@ -463,25 +465,27 @@ class BaseDataset(Dataset):
         labels_road = bev_points[:, -2]
         labels_vehicle = bev_points[:, -1]
 
-        r = self.cfgs['lidar_range']
-        ax = draw_points_boxes_plt(r, points=bev_points[labels_road == 0],
-                                   points_c='gray', return_ax=True)
-        ax = draw_points_boxes_plt(r, points=bev_points[labels_road == 1],
+        lr = self.cfgs['lidar_range']
+        fig = plt.figure(figsize=((lr[3] - lr[0]) / 10, (lr[4] - lr[1]) / 10))
+        ax = fig.add_subplot()
+        ax = draw_points_boxes_plt(lr, points=bev_points[labels_road == 0],
+                                   points_c='gray', ax=ax, return_ax=True)
+        ax = draw_points_boxes_plt(lr, points=bev_points[labels_road == 1],
                                    points_c='blue', ax=ax, return_ax=True)
-        ax = draw_points_boxes_plt(r, points=bev_points[labels_vehicle == 1],
+        ax = draw_points_boxes_plt(lr, points=bev_points[labels_vehicle == 1],
                                    points_c='red', ax=ax, return_ax=True)
         if lidar_idx is not None:
             for i in np.unique(lidar_idx):
-                ax = draw_points_boxes_plt(r, points=lidar[lidar_idx == i],
+                ax = draw_points_boxes_plt(lr, points=lidar[lidar_idx == i],
                                            points_c='c', ax=ax, return_ax=True,
-                                           marker_size=0.3)
+                                           marker_size=1)
             else:
-                ax = draw_points_boxes_plt(r, points=lidar,
+                ax = draw_points_boxes_plt(lr, points=lidar,
                                            points_c='c', ax=ax, return_ax=True,
-                                           marker_size=0.3)
-        draw_points_boxes_plt(r, boxes_gt=boxes, ax=ax)
+                                           marker_size=1)
+        draw_points_boxes_plt(lr, boxes_gt=boxes, ax=ax)
 
-        # draw bev maps
+        # draw bev-opv2v maps
         draw_img(data_dict['bevmap_dynamic'])
 
     def post_process(self, batch_dict):

@@ -22,7 +22,7 @@ DATASET:
   load_all: false
   max_cav: 7
   com_range: 45
-  bev_res: &bev_res 0.2 # resolution of bev map
+  bev_res: &bev_res 0.2 # resolution of bev-opv2v map
   load_camera: false
 
   voxel:
@@ -57,7 +57,7 @@ DATASET:
       DistributionPostProcess:
         det_r: 50
         voxel_size: *voxel_size
-        vis_dir: /media/hdd/yuan/evibev/logs/opv2v/test/img
+        vis_dir: /media/hdd/yuan/evibev-opv2v/logs/opv2v/test/img
         visualization: True
         stride:
           surface: 2

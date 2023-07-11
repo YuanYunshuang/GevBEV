@@ -23,17 +23,20 @@ if __name__ == "__main__":
     mp.set_start_method('spawn')
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("--log_dir", type=str, default="/mars/projects20/evibev_exp/opv2v/evigausbev")
+    parser.add_argument("--log_dir", type=str, default="/mars/projects20/evibev_exp/opv2v/evigausbev-opv2v")
+    parser.add_argument("--eval_loc_err", action="store_true")
     parser.add_argument("--cuda_loader", action="store_true")
-    parser.add_argument("--save-img", action="store_true")
+    parser.add_argument("--save_img", action="store_true")
     args = parser.parse_args()
 
-    exps = np.zeros((15, 2))
-    exps[:5, 0] = np.arange(1, 6) * 0.1
-    exps[5:, 1] = np.arange(1, 11) * 0.1
+    print(args.log_dir)
+    exps = np.zeros((16, 2))
+    exps[1:6, 0] = np.arange(1, 6) * 0.1
+    exps[6:, 1] = np.arange(1, 11) * 0.1
 
-    for exp in exps:
-        print(exp)
-        try_test(args, exp, args.save_img)
-    # try_test(args, [0., 0.])
-    # try_test(args, 'bev_p2')
+    if args.eval_loc_err:
+        for exp in exps[8:]:
+            print(exp)
+            try_test(args, exp, args.save_img)
+    else:
+        try_test(args, exps[0], args.save_img)

@@ -229,7 +229,7 @@ class DistributionPostProcess(object):
                 ax.scatter(road_points[:, 0], road_points[:, 1],
                            c=road_points_prob, cmap='hot', s=1, vmin=0, vmax=1)
             if points is not None:
-                ax.plot(points[:, 0], points[:, 1], '.', markersize=0.5)
+                ax.plot(points[:, 0], points[:, 1], '.c', markersize=2)
 
             s = 4
             for i, (sam, conf) in enumerate(zip(pred_box_sam, pred_box_conf)):
@@ -253,7 +253,7 @@ class DistributionPostProcess(object):
             plt.savefig(os.path.join(self.vis_dir, fn) + '_1.png')
             plt.close()
 
-            # draw box bev map
+            # draw box bev-opv2v map
             box_bev_conf = self.out['box_bev_conf'][0, :, :, 1].cpu().numpy().T
             plt.imshow(box_bev_conf[::-1], cmap='jet', vmin=0, vmax=1)
             plt.savefig(os.path.join(self.vis_dir, fn) + '_0.png')

@@ -224,7 +224,7 @@ class BEVBase(nn.Module):
 
     @torch.no_grad()
     def get_bev_pts_with_boxes(self, batch_dict):
-        # get bev points
+        # get bev-opv2v points
         bev_pts = pad_r(self.centers.clone())
         bev_pts = torch.tile(bev_pts.unsqueeze(1), (1, 3, 1))
         bev_pts[:, :, 1:3] = bev_pts[:, :, 1:3] + \
@@ -292,7 +292,7 @@ class BEVBase(nn.Module):
             indices, mask = self.pts_to_masked_indices(tgt_pts)
             tgt_pts = tgt_pts[mask]
             tgt_label = tgt_bev_pts[mask, 3]
-            # sample new tgt with bev map
+            # sample new tgt with bev-opv2v map
             # ixy = metric2indices(tgt_pts, 0.2).long().T
             # gt_bev = batch_dict['bevmap_static'].permute(0, 2, 1).flip(dims=(1,)) # gt has res=0.2
             # ixy[1:] += int(gt_bev.shape[1] / 2)

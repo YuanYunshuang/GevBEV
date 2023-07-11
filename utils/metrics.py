@@ -435,7 +435,7 @@ class MetricBevbase(Metric):
         ious_obs = torch.stack(self.result['iou_obs'], dim=0).mean(dim=0) * 100
 
         # self.pr_curve(f"{self.filename_prefix}_prc.png")
-        # self.unc_Q(f"{self.filename_prefix}_unc_q.png")
+        self.unc_Q(f"{self.filename_prefix}_unc_q.png")
         # self.conf_Q(f"{self.filename_prefix}_conf_q.png")
 
         self.result_dict = {

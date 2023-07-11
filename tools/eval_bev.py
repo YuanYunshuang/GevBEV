@@ -3,6 +3,7 @@ import glob
 
 import matplotlib.pyplot as plt
 import numpy as np
+import torch
 import tqdm
 import argparse
 
@@ -17,7 +18,7 @@ from config import load_yaml
 import dataset.processors as PP
 
 
-def eval_v2vreal_official(args, n=''):
+def eval_v2vreal_official(args, obsmasks=None):
     cfgs = load_yaml(args)
 
     # set paths
@@ -38,9 +39,9 @@ def eval_v2vreal_official(args, n=''):
         metric_cls = getattr(metrics, metric_name, None)
         if metric_cls is not None:
             metrics_instances.append(metric_cls(cfgs['metrics'][metric_name],
-                                                log_dir_in, None, name=f'test{n}'))
+                                                log_dir_in, None, name=f'test_tmp'))
 
-    # get bev map size
+    # get bev-opv2v map size
     bev_sizes = {}
     pp_args = cfgs['postprocessors']['args']['DistributionPostProcess']
     lr = pp_args['lidar_range']
@@ -64,16 +65,24 @@ def eval_v2vreal_official(args, n=''):
 
         bevmap_static = None
         bevmap_dynamic= None
+        obsmsk = None
 
         if 'surface' not in bev_sizes:
             out_dict.pop('distr_surface')
         else:
-            # load gt bev map
+            scenario = out_dict['frame_id'][0][0]
+            frame = out_dict['frame_id'][0][1].split('_')[0]
+
+            # get observation mask
+            if obsmasks is not None:
+                obsmsk = obsmasks['_'.join([scenario, frame])]
+
+            # load gt bev-opv2v map
             bev_file = os.path.join(
                 args.data_test_dir,
-                out_dict['frame_id'][0][0],
+                scenario,
                 out_dict['ego_id'][0],
-                out_dict['frame_id'][0][1].split('_')[0] + '_bev_road.png',
+                frame + '_bev_road.png',
             )
             bevmap = cv2.imread(bev_file)[::-2, ::2, :2].copy()
             bevmap_static = bevmap[..., :1].transpose(2, 0, 1)
@@ -82,6 +91,7 @@ def eval_v2vreal_official(args, n=''):
             bevmap_dynamic = torch.from_numpy(bevmap_dynamic).cuda()
             out_dict['bevmap_static'] = bevmap_static
             out_dict['bevmap_dynamic'] = bevmap_dynamic
+
         # out_dict = format_to_evibev(out_dict)
         out_dict = post_processor(out_dict)
         for metric in metrics_instances:
@@ -90,14 +100,14 @@ def eval_v2vreal_official(args, n=''):
             # if bevmap_dynamic is None:
             bevmap_dynamic = metric.get_gt_mask(out_dict, len(out_dict['box_bev_conf']))[0].float()
             bev_pred_dynamic = (out_dict['box_bev_conf'][0].argmax(dim=-1) == 1).float()
-            # frameworks in the repo v2v4real can only process bev shape that is dividable by 2**n, n > 8
+            # frameworks in the repo v2v4real can only process bev-opv2v shape that is dividable by 2**n, n > 8
             # for opv2v dataset we train with shape (256, 256) but evaluate on (250, 250) to match the size
-            # of cobevt (camera track). Therefore, we crop here the bev maps to the goal size.
+            # of cobevt (camera track). Therefore, we crop here the bev-opv2v maps to the goal size.
             sz = bev_sizes['object']
             px = (bev_pred_dynamic.shape[0] - sz['x']) // 2
             py = (bev_pred_dynamic.shape[1] - sz['y']) // 2
             bev_pred_dynamic = bev_pred_dynamic[px:sz['x']+px, py:sz['y']+py]
-            ious_bev_dynamic.append(iou(bev_pred_dynamic, bevmap_dynamic.squeeze()))
+            ious_bev_dynamic.append(iou(bev_pred_dynamic, bevmap_dynamic.squeeze(), obsmsk))
 
             # cal. surface iou
             if bevmap_static is not None:
@@ -106,16 +116,16 @@ def eval_v2vreal_official(args, n=''):
                 px = (bev_pred_static.shape[0] - sz['x']) // 2
                 py = (bev_pred_static.shape[1] - sz['y']) // 2
                 bev_pred_static = bev_pred_static[px:sz['x'] + px, py:sz['y'] + py]
-                ious_bev_static.append(iou(bev_pred_static, bevmap_static))
+                ious_bev_static.append(iou(bev_pred_static, bevmap_static.squeeze(), obsmsk))
 
     with open((os.path.join(os.path.dirname(log_dir_in), 'ious.txt')), 'a') as fh:
         iou_bev_dynamic_all = torch.stack(ious_bev_dynamic).mean().item() * 100
-        print('bev dynamic', iou_bev_dynamic_all)
+        print('bev-opv2v dynamic', iou_bev_dynamic_all)
         fh.write(f'{args.test_dir}: dynamic [{iou_bev_dynamic_all:.2f}]\n')
         if len(ious_bev_static) > 0:
             iou_bev_static_all = torch.stack(ious_bev_static).mean().item() * 100
-            print('bev static', iou_bev_static_all)
-            fh.write(f'{" " * len(args.test_dir)}: static[{iou_bev_static_all:.2f}]\n')
+            print('bev-opv2v static', iou_bev_static_all)
+            fh.write(f'{" " * len(args.test_dir)}: static  [{iou_bev_static_all:.2f}]\n')
 
 
 def eval_evibev(args):
@@ -148,7 +158,7 @@ def eval_evibev(args):
             ious_evibev.append(iou_evibev)
 
     iou_evibev_all = torch.stack(ious_evibev).mean().item() * 100
-    print('evibev', iou_evibev_all)
+    print('evibev-opv2v', iou_evibev_all)
     open(f'iou_{iou_evibev_all:.2f}.txt').close()
 
 
@@ -165,11 +175,13 @@ def format_to_evibev(out_dict):
 def load_obs_mask(obsmask_dir):
     files = glob.glob(os.path.join(obsmask_dir, '*.pth'))
     obsmask = {}
-    for f in files:
+    for f in tqdm.tqdm(files):
         data_dict = torch.load(f)
         for i, frame_id in enumerate(data_dict['frame_id']):
             name = f"{frame_id[0]}_{frame_id[1]}"
             obsmask[name] = data_dict['box_obs_mask'][i]
+
+    torch.save(obsmask, "../tmp/obsmask_evibev.pth")
     return obsmask
 
 
@@ -185,9 +197,12 @@ def parse_evibev_inf(inf_dir):
     return res
 
 
-def iou(pred, gt):
-    intersection = (pred * gt).bool()
-    union = (pred + gt).bool()
+def iou(pred, gt, obsmsk=None):
+    if obsmsk is not None:
+        pred = pred[obsmsk]
+        gt = gt[obsmsk]
+    intersection = torch.logical_and(pred, gt)
+    union = torch.logical_or(pred, gt)
     iou_bev = intersection.sum() / union.sum()
     return iou_bev
 
@@ -198,7 +213,7 @@ def plot_result(bev_pred, evibev_pred, bev_gt):
     bev_gt = bev_gt.cpu().numpy().T
     h, w = bev_gt.shape
     fig = plt.figure(figsize=(h / 50 * 3, w / 50))
-    # fig.suptitle(f'IoU: bev({iou_bev * 100:.2f}), evibev({iou_evibev * 100:.2f})')
+    # fig.suptitle(f'IoU: bev-opv2v({iou_bev * 100:.2f}), evibev-opv2v({iou_evibev * 100:.2f})')
     axs = fig.subplots(3, 1)
     axs[0].imshow(bev_pred)
     axs[1].imshow(evibev_pred)
@@ -206,19 +221,20 @@ def plot_result(bev_pred, evibev_pred, bev_gt):
     plt.savefig("/home/yuan/Downloads/tmp.png")
 
 
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--test_dir", type=str, default="/mars/projects20/evibev_exp/opv2v/fcooper/test")
+    parser.add_argument("--test_dir", type=str, default="/mars/projects20/evibev_exp/opv2v/attnfuse/test")
+    # parser.add_argument("--data_test_dir", type=str, default="/koko/v2vreal/test")
+    # parser.add_argument("--config", type=str, default="../config/v2vreal_test.yaml")
     parser.add_argument("--data_test_dir", type=str, default="/koko/OPV2V/additional/test")
-    parser.add_argument("--config", type=str, default="./config/opv2v_test.yaml")
+    parser.add_argument("--config", type=str, default="../config/opv2v_test.yaml")
     args = parser.parse_args()
 
     # eval_v2vreal_official(args)
 
-    test_dirs = sorted(glob.glob("/mars/projects20/evibev_exp/v2vreal/cobevt_tmp/test*-*"))
-    args.data_test_dir = "/koko/v2vreal"
-    args.config = "./config/v2vreal_test.yaml"
-    for test_dir in test_dirs[:10]:
+    test_dirs = sorted(glob.glob("/mars/projects20/evibev_exp/opv2v/cobevt/test*-*"))
+    for test_dir in test_dirs:
         # if test_dir == "/mars/projects20/evibev_exp/v2vreal/cobevt/test0-1":
         #     continue
         print(test_dir)

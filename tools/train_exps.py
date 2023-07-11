@@ -6,7 +6,7 @@ import argparse, os, shutil
 
 def try_train(args, exp):
     # try:
-    args.log_dir = f"/media/hdd/yuan/evibev/ablation/{exp}"
+    args.log_dir = f"logs/{exp}"
     # if os.path.exists(os.path.join(args.log_dir, 'test', 'inf')):
     #     shutil.rmtree(os.path.join(args.log_dir, 'test', 'inf'))
     setattr(args, 'config', os.path.join(args.log_dir, 'config.yaml'))

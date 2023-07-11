@@ -122,7 +122,7 @@ def aligned_boxes_iou3d_gpu(boxes_a, boxes_b, return_union=False):
     boxes_b_height_max = (boxes_b[:, 2] + boxes_b[:, 5] / 2).view(-1, 1)
     boxes_b_height_min = (boxes_b[:, 2] - boxes_b[:, 5] / 2).view(-1, 1)
 
-    # bev overlap
+    # bev-opv2v overlap
     overlaps_bev = torch.cuda.FloatTensor(torch.Size((boxes_a.shape[0], boxes_b.shape[0]))).zero_()  # (N, M)
     cuda_ops.boxes_overlap_bev_gpu(boxes_a.contiguous(), boxes_b.contiguous(), overlaps_bev)
     overlaps_bev = torch.diagonal(overlaps_bev).reshape(-1, 1)
@@ -160,7 +160,7 @@ def boxes_iou3d_gpu(boxes_a, boxes_b, return_union=False):
     boxes_b_height_max = (boxes_b[:, 2] + boxes_b[:, 5] / 2).view(1, -1)
     boxes_b_height_min = (boxes_b[:, 2] - boxes_b[:, 5] / 2).view(1, -1)
 
-    # bev overlap
+    # bev-opv2v overlap
     overlaps_bev = torch.cuda.FloatTensor(torch.Size((boxes_a.shape[0], boxes_b.shape[0]))).zero_()  # (N, M)
     cuda_ops.boxes_overlap_bev_gpu(boxes_a.contiguous(), boxes_b.contiguous(), overlaps_bev)
 
@@ -253,7 +253,7 @@ def rotate_weighted_nms_gpu(
 
 def nms_gpu(boxes, scores, thresh, pre_maxsize=None, **kwargs):
     """
-    Operate on rotated bev boxes[x,y,dx,dy,heading]
+    Operate on rotated bev-opv2v boxes[x,y,dx,dy,heading]
     :param boxes: (N, 7) [x, y, z, dx, dy, dz, heading]
     :param scores: (N)
     :param thresh:
@@ -272,7 +272,7 @@ def nms_gpu(boxes, scores, thresh, pre_maxsize=None, **kwargs):
 
 def nms_normal_gpu(boxes, scores, thresh, **kwargs):
     """
-    Ignore heading and operate on bev boxes[x,y,dx,dy]
+    Ignore heading and operate on bev-opv2v boxes[x,y,dx,dy]
     :param boxes: (N, 7) [x, y, z, dx, dy, dz, heading]
     :param scores: (N)
     :param thresh:

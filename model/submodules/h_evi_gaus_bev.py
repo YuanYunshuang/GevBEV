@@ -44,7 +44,7 @@ class EviGausBEV(BEVBase):
             Nall, Nsel = None, None
         else:
             if getattr(self, 'cpm_option', 'none') == 'road':
-                assert batch_dict['bevmap_static'] is not None, 'gt road bev is not available.'
+                assert batch_dict['bevmap_static'] is not None, 'gt road bev-opv2v is not available.'
                 sx, sy = batch_dict['bevmap_static'].shape[1:3]
                 sx = sx // self.grid_size[0]
                 sy = sy // self.grid_size[1]

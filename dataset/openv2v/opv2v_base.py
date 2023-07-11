@@ -274,7 +274,7 @@ class OpV2VBase(BaseDataset):
             lidar_np[:, :3] = \
                project_points_by_matrix_torch(lidar_np[:, :3],
                                               transformation_matrix)
-        lidar_np = mask_points_by_range(lidar_np, self.cfgs['lidar_range'])
+        # lidar_np = mask_points_by_range(lidar_np, self.cfgs['lidar_range'])
 
         selected_cav_processed.update(
             {'object_bbx_center': object_bbx_center[object_bbx_mask == 1],

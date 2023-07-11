@@ -93,11 +93,12 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--log_dir", type=str, default="../logs")
     parser.add_argument("--cuda_loader", action="store_true")
-    parser.add_argument("--save-img", action="store_true")
-    parser.add_argument("--vis-func", type=str) # , default="vis_semantic_unc"
+    parser.add_argument("--save_img", action="store_true")
+    parser.add_argument("--vis_func", type=str) # , default="vis_semantic_unc"
     args = parser.parse_args()
 
     setattr(args, 'config', os.path.join(args.log_dir, 'config.yaml'))
     cfgs = load_yaml(args)
-
+    args.save_img = True
+    cfgs['DATASET']['postprocessors']['args']['DistributionPostProcess']['visualization'] = args.save_img
     test(cfgs, args)

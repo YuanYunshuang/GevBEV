@@ -22,7 +22,7 @@ DATASET:
   load_all: false
   max_cav: 2
   com_range: 45
-  bev_res: &bev_res 0.2 # resolution of gt bev map
+  bev_res: &bev_res 0.2 # resolution of gt bev-opv2v map
   load_camera: false
   loc_err_flag: false
   loc_err_t_std: 0.2

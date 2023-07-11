@@ -22,7 +22,7 @@ DATASET:
   load_all: false
   max_cav: 2
   com_range: 45
-  bev_res: &bev_res 0.2 # resolution of gt bev map
+  bev_res: &bev_res 0.2 # resolution of gt bev-opv2v map
   load_camera: false
   loc_err_flag: false
   loc_err_t_std: 0.2
@@ -40,8 +40,8 @@ DATASET:
     z: &z [-3, 3] # z_min, z_max
   lidar_range: &lr [-50, -50, -3, 50, 50, 3]
   free_space_h: -1.5
-  free_space_d: 6
-  free_space_step: 1.0
+  free_space_d: 7.5
+  free_space_step: 1.5
   normalize_features:  # TODO: this is not used, consider removing
     x: *x
     y: *y
