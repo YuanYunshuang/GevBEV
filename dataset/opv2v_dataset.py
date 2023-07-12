@@ -96,11 +96,11 @@ if __name__ == '__main__':
     from config import load_yaml
     import cv2
     parser = argparse.ArgumentParser()
-    parser.add_argument("--config", type=str, default="./config/minkunet_evigausbev_v2v4real.yaml")
+    parser.add_argument("--config", type=str, default="./config/minkunet_evigausbev_opv2v.yaml")
     parser.add_argument("--cuda_loader", action="store_true")
     args = parser.parse_args()
     cfg = load_yaml(args)
-    cfg['DATASET']['visualize'] = False
+    cfg['DATASET']['visualize'] = True
     cfg['DATASET']['loc_err_flag'] = False
     cfg['DATASET']['loc_err_t_std'] = 0.5
     cfg['DATASET']['loc_err_r_std'] = 0.0
@@ -116,11 +116,11 @@ if __name__ == '__main__':
         i += 1
         # if i > 5:
         #     break
-        img = batch['bevmap_dynamic'][::2, ::2] * 255
-        cv2.imwrite(
-            os.path.join("/mars/projects20/evibev_exp/v2vreal/gt_bev", '_'.join(batch['frame_id']) + '.jpg'),
-            img.T
-        )
+        # img = batch['bevmap_dynamic'][::2, ::2] * 255
+        # cv2.imwrite(
+        #     os.path.join("/mars/projects20/evibev_exp/v2vreal/gt_bev", '_'.join(batch['frame_id']) + '.jpg'),
+        #     img.T
+        # )
 
     # dataset.add_free_space_points.get_mean_runtime()
     # dataset.sample_bev_pts.get_mean_runtime()

@@ -40,7 +40,7 @@ DATASET:
     z: &z [-3, 3] # z_min, z_max
   lidar_range: &lr [-50, -50, -3, 50, 50, 3]
   free_space_h: -1.5
-  free_space_d: 6
+  free_space_d: 7.5
   free_space_step: 1.0
   normalize_features:  # TODO: this is not used, consider removing
     x: *x
