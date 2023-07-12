@@ -17,8 +17,6 @@ import torch.multiprocessing as mp
 
 
 def train(cfgs, args):
-    if args.cuda_loader:
-        mp.set_start_method('spawn')
     seed_everything(1234)
     device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
 
@@ -31,7 +29,7 @@ def train(cfgs, args):
         log_path = cfgs['TRAIN']['log_dir']
         ckpt = torch.load(os.path.join(log_path, 'last.pth'))
         load_model_dict(model, ckpt['model_state_dict'])
-        epoch_start = ckpt.get('epoch', 0)
+        epoch_start = ckpt.get('epoch', 40)
         # epoch_start = 0
         
         # iteration = ckpt['iteration']
@@ -128,6 +126,9 @@ if __name__ == "__main__":
     parser.add_argument("--seed", type=int, default=1234)
     parser.add_argument("--debug", action="store_true")
     args = parser.parse_args()
+
+    if args.cuda_loader:
+        mp.set_start_method('spawn')
 
     if args.resume:
         assert os.path.exists(os.path.join(args.log_dir, 'config.yaml')), \
