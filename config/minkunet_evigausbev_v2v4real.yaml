@@ -68,7 +68,7 @@ DATASET:
           object: 1.0
     test: [ 'DistributionPostProcess' ]
 
-  batch_size_train: 8
+  batch_size_train: 4
   batch_size_val: 2
   batch_size_test: 2
   n_workers: 4
