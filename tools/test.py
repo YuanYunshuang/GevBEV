@@ -94,7 +94,6 @@ if __name__ == "__main__":
     parser.add_argument("--log_dir", type=str, default="../logs")
     parser.add_argument("--cuda_loader", action="store_true")
     parser.add_argument("--save_img", action="store_true")
-    parser.add_argument("--vis_func", type=str) # , default="vis_semantic_unc"
     args = parser.parse_args()
 
     setattr(args, 'config', os.path.join(args.log_dir, 'config.yaml'))

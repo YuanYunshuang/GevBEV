@@ -1,5 +1,6 @@
 import glob
 import json
+import shutil
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -502,14 +503,32 @@ def stech_imgs(path):
         plt.savefig(f.replace('pred', 'steched'))
         plt.close()
 
+if __name__=="__main__":
+    paths = {
+        'bev-opv2v': "/mars/projects20/evibev_exp/bev-opv2v",
+        'evibev-opv2v': "/mars/projects20/evibev_exp/evibev-opv2v",
+        'evigausbev-opv2v': "/mars/projects20/evibev_exp/evigausbev-opv2v",
+        'bev-v2vreal': "/mars/projects20/evibev_exp/bev-v2vreal",
+        'evibev-v2vreal': "/mars/projects20/evibev_exp/evibev-v2vreal",
+        'evigausbev-v2vreal': "/mars/projects20/evibev_exp/evigausbev-v2vreal",
+    }
+    outpath = "/mars/projects20/evibev_exp/pub"
+
+    for k, p in paths.items():
+        model, dataset = k.split('-')
+        os.makedirs(os.path.join(outpath, k), exist_ok=True)
+        shutil.copy(os.path.join(p, 'config.yaml'), os.path.join(outpath, k, 'config.yaml'))
+        ckpt = torch.load(os.path.join(p, 'last.pth'))
+        ckpt = {'model_state_dict': ckpt['model_state_dict']}
+        torch.save(ckpt, os.path.join(outpath, k, 'epoch49.pth'))
 
 # prc('surface')
 # prc('object')
 # unc_q('surface', 'opv2v')
 # unc_q('object', 'opv2v')
 # unc_q('object', 'v2vreal')
-cpm('sur')
-cpm('obj')
+# cpm('sur')
+# cpm('obj')
 # pose_err()
 # compare(
 #     "/mars/projects20/evibev_exp/v2vreal/evigausbev-opv2v/test0-0",

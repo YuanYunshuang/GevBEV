@@ -65,7 +65,6 @@ def train(cfgs, args):
         # save final result
         torch.save({
             'model_state_dict': model.state_dict(),
-            'optimizer_state_dict': optimizer.state_dict()
         }, os.path.join(logger.log_path, f'epoch{epoch}.pth'))
 
 

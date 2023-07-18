@@ -1,3 +1,6 @@
+/*
+Written by Yunshuang Yuan
+*/
 #pragma once
 #ifndef _scalar_attention_KERNEL
 #define _scalar_attention_KERNEL

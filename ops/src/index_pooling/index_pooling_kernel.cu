@@ -1,3 +1,6 @@
+/*
+Written by Yunshuang Yuan
+*/
 #include "../cuda_utils.h"
 #include "index_pooling_kernel.h"
 

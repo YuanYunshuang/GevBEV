@@ -1,5 +1,8 @@
+/*
+Written by Yunshuang Yuan
+*/
 #include <vector>
-#include <THC/THC.h>
+#include <ATen/cuda/CUDAEvent.h>
 #include <torch/serialize/tensor.h>
 #include <ATen/cuda/CUDAContext.h>
 #include "index_pooling_kernel.h"

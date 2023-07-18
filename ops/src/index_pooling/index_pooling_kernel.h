@@ -1,3 +1,6 @@
+/*
+Written by Yunshuang Yuan
+*/
 #pragma once
 #ifndef _index_pooling_KERNEL
 #define _index_pooling_KERNEL
