@@ -16,7 +16,7 @@ class labels for each lidar point.
 Since the lidar intensity simulated by CARLA doesn't reflect the
 real world situation, we replace the intensity column with the class labels. 
 As a result, our lidar files are in binary format with attributes of 
-[x, y, z, label] for each raw.
+[x, y, z, label] for each row.
 
 After downloading, unzip with 
 ```shell
