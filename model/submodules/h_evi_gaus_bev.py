@@ -37,24 +37,33 @@ class EviGausBEV(BEVBase):
         dists = torch.zeros_like(ctrs[:, 1:].view(-1, 1, 2)) + self.nbrs
         probs_weighted = weighted_mahalanobis_dists(reg_evi, reg_var, dists, self.var0)
         evidence, obs_mask = self.get_evidence_map(probs_weighted, ctrs)
-        unc, conf = self.evidence_to_conf_unc(evidence)
 
-        if getattr(self, 'cpm_option', 'none') == 'none':
+        if getattr(self, 'cpm_option', 'none') == 'none' or self.training:
             evidence_fused = evidence
             Nall, Nsel = None, None
         else:
+            unc, conf = self.evidence_to_conf_unc(evidence)
+            # if self.name == "surface":
+            #     unc, conf = self.evidence_to_conf_unc(evidence)
+            #     batch_dict['cpm_unc'] = unc
+            # else:
+            #     # use uncertainty for cpm selection
+            #     unc = batch_dict['cpm_unc']
+            #     _, conf = self.evidence_to_conf_unc(evidence)
             if getattr(self, 'cpm_option', 'none') == 'road':
                 assert batch_dict['bevmap_static'] is not None, 'gt road bev-opv2v is not available.'
                 sx, sy = batch_dict['bevmap_static'].shape[1:3]
-                sx = sx // self.grid_size[0]
-                sy = sy // self.grid_size[1]
+                sx = sx // self.size_x
+                sy = sy // self.size_y
                 cared_mask = batch_dict['bevmap_static'][:, ::sx, ::sy].bool()
             elif getattr(self, 'cpm_option', 'none') == 'all':
                 cared_mask = batch_dict['distr_conv_out'][f'p{self.stride}']['obs_mask']
                 cared_mask = torch.ones_like(cared_mask).bool()
+            else:
+                raise NotImplementedError
 
-            evidence_cpm, Nall, Nsel = self.get_cpm_map(
-                batch_dict['num_cav'], unc, conf, cared_mask, batch_dict
+            evidence_cpm, Nall, Nsel = self.get_cpm_evimap(
+                batch_dict['num_cav'], unc, conf, evidence, cared_mask, batch_dict
             )
 
             ego_idx = [sum(batch_dict['num_cav'][:i]) for i in range(len(batch_dict['num_cav']))]
@@ -93,7 +102,12 @@ class EviGausBEV(BEVBase):
         obs_mask = obs_mask.view(batch_size, self.size_x, self.size_y).bool()
         return evidence, obs_mask
 
-    def get_cpm_map(self, num_cav, unc, evidence, cared_mask, batch_dict=None):
+    def get_cpm_evimap(self, num_cav, unc, conf, evidence, cared_mask, batch_dict=None):
+        """
+        1. Count pixels of sharing all observed and masked (i.e road) areas
+        2. Count pixels of sharing selected area which is filter by a given unc. threshold
+        3. Build the CPM after selection.
+        """
         evi_share = []
         n_share_all = 0
         n_share_selected = 0
@@ -101,17 +115,25 @@ class EviGausBEV(BEVBase):
             if c == 1:
                 evi_share.append(torch.zeros_like(evidence[0]))
                 continue
+            # get unc. and evidence map for the current batch
             idx_start = sum(num_cav[:i])
             cur_unc = unc[idx_start:idx_start + c]
+            cur_conf = conf[idx_start:idx_start + c]
+            cur_evi = evidence[idx_start:idx_start + c]
 
-            if batch_dict is not None:
-                ego_mask = batch_dict['in_data'].C[:, 0] == idx_start
-                coop_mask = batch_dict['in_data'].C[:, 0] == idx_start + 1
-                ego_pts = batch_dict['xyz'][ego_mask].cpu().numpy()
-                coop_pts = batch_dict['xyz'][coop_mask].cpu().numpy()
-                ax = draw_points_boxes_plt(pc_range=50, points=ego_pts, points_c='r',
-                                           return_ax=True)
-                draw_points_boxes_plt(pc_range=50, points=coop_pts, points_c='g', ax=ax)
+            # if batch_dict is not None:
+            #     ego_mask = batch_dict['in_data'].C[:, 0] == idx_start
+            #     coop_mask = batch_dict['in_data'].C[:, 0] == idx_start + 1
+            #     ego_pts = batch_dict['xyz'][ego_mask].cpu().numpy()
+            #     coop_pts = batch_dict['xyz'][coop_mask].cpu().numpy()
+            #     ax = draw_points_boxes_plt(pc_range=self.lidar_range,
+            #                                points=ego_pts,
+            #                                points_c='r',
+            #                                return_ax=True)
+            #     draw_points_boxes_plt(pc_range=self.lidar_range,
+            #                           points=coop_pts,
+            #                           points_c='g',
+            #                           ax=ax)
 
             # img = cm_hot(1 - cur_unc[0].cpu().numpy())[..., :3] * 255
             # Image.fromarray(img.astype(np.uint8)).save(
@@ -128,15 +150,15 @@ class EviGausBEV(BEVBase):
             # plt.savefig('/media/hdd/yuan/evibev_exp/unc1.png')
             # plt.close()
 
-            cur_evi = evidence[idx_start:idx_start + c]
-            # share all info on potential road surface
+            # share all info on masked area
             resp_all = torch.logical_and(cur_unc[1:] < 1.0, cared_mask[i].unsqueeze(0))
-            n_share_all = n_share_all + resp_all.sum()
+            n_share_all = n_share_all + resp_all.sum().item()
             # ego mask for requesting the CPM from coop. CAV
-            req_mask = torch.logical_and(cur_unc[0] > self.cpm_thr, cared_mask[i])
+            req_mask = torch.logical_and(cur_unc[0] >= self.cpm_thr, cared_mask[i])
 
             # coop mask for responding
             rsp_mask = torch.logical_and(cur_unc[1:] < 1.0, req_mask.unsqueeze(0))
+            # rsp_mask = torch.logical_and(cur_conf[1:, :, :, 1] > 0., req_mask.unsqueeze(0))
 
             # img = torch.zeros_like(rsp_mask[[0, 0, 0]])
             # img[0] = req_mask
@@ -150,8 +172,8 @@ class EviGausBEV(BEVBase):
             # )
 
             # share selected
-            n_share_selected = n_share_selected + rsp_mask.sum()
-            # get conf map of coop. CAV
+            n_share_selected = n_share_selected + rsp_mask.sum().item()
+            # get evidence map of coop. CAV
             evi_coop = cur_evi[1:].clone()
             evi_coop[torch.logical_not(rsp_mask)] = 0
             evi_share.append(evi_coop.sum(dim=0))
@@ -160,9 +182,9 @@ class EviGausBEV(BEVBase):
 
         n_share_all = n_share_all / len(num_cav)
         n_share_selected = n_share_selected / len(num_cav)
-        return evi_share, n_share_all.item(), n_share_selected.item()
+        return evi_share, n_share_all, n_share_selected
 
-    def get_cpms(self, num_cav, unc, centers, reg, road_bev, thr=0.5):
+    def get_cpm_centerpoints(self, num_cav, unc, centers, reg, road_bev, thr=0.5):
         centers_share = []
         reg_share = []
         for i, c in enumerate(num_cav):

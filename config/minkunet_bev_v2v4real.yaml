@@ -40,10 +40,6 @@ DATASET:
   free_space_h: -1.5
   free_space_d: 6
   free_space_step: 1.5
-  normalize_features:  # TODO: this is not used, consider removing
-    x: *x
-    y: *y
-    z: *z
 
   augmentation: false
   preprocessors:

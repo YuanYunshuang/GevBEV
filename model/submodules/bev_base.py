@@ -32,7 +32,6 @@ class HBEVBase(nn.Module):
                 raise NotImplementedError
             setattr(self, f'mink_xylim_{k}', mink_coor_limit(lr, self.voxel_size, stride))  # relevant to ME
 
-
     def get_conv_layer(self, args):
         minkconv_layer = functools.partial(
             minkconv_conv_block, d=2, bn_momentum=0.1,
@@ -49,12 +48,12 @@ class HBEVBase(nn.Module):
         for k in self.convs:
             stride = int(k[1])
             stensor3d = batch_dict['compression'][k]
-            coor = fuse_batch_indices(stensor3d.C, batch_dict['num_cav'])
-            # todo: barely fuse voxels with batch indices might cause overlapped voxels even it has
-            #  a low chance, we temporarily average them.
-            coor, indices = coor[:, :3].unique(dim=0, return_inverse=True)
-            feat = torch_scatter.scatter_mean(stensor3d.F, indices, dim=0)
-            obs_mask = self.get_obs_mask(coor, stride)
+            coor = stensor3d.C[:, :3]
+            feat = stensor3d.F
+            if getattr(self, "cpm_option", "none") == "none":
+                # fuse at feature level
+                coor, feat = self.fuse_coor_feat(coor, feat, batch_dict['num_cav'])
+            obs_mask = self.get_obs_mask(fuse_batch_indices(stensor3d.C, batch_dict['num_cav']), stride)
 
             stensor2d = ME.SparseTensor(
                 coordinates=coor.contiguous(),
@@ -77,6 +76,9 @@ class HBEVBase(nn.Module):
             # mask = (stensor2d.C[:, 1:].abs() < (self.det_r / self.voxel_size)).all(dim=-1)
             coor = stensor2d.C[mask]
             feat = stensor2d.F[mask]
+            if getattr(self, "cpm_option", "none") != "none" and self.training:
+                # fuse at the evidence level
+                coor, feat = self.fuse_coor_feat(coor, feat, batch_dict['num_cav'])
             batch_dict['distr_conv_out'][k] = {
                 'coor': coor,
                 'feat': feat,
@@ -85,6 +87,14 @@ class HBEVBase(nn.Module):
 
         for h in self.heads:
             getattr(self, h)(batch_dict)
+
+    def fuse_coor_feat(self, coor, feat, num_cavs):
+        coor = fuse_batch_indices(coor, num_cavs)
+        # todo: barely fuse voxels with batch indices might cause overlapped voxels even it has
+        #  a low chance, we temporarily average them.
+        coor, indices = coor[:, :3].unique(dim=0, return_inverse=True)
+        feat = torch_scatter.scatter_mean(feat, indices, dim=0)
+        return coor, feat
 
     def get_obs_mask(self, coor, stride):
         res = stride * self.voxel_size

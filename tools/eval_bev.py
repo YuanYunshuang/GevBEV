@@ -221,7 +221,6 @@ def plot_result(bev_pred, evibev_pred, bev_gt):
     plt.savefig("/home/yuan/Downloads/tmp.png")
 
 
-
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--test_dir", type=str, default="/mars/projects20/evibev_exp/opv2v/attnfuse/test")
@@ -233,7 +232,7 @@ if __name__ == "__main__":
 
     # eval_v2vreal_official(args)
 
-    test_dirs = sorted(glob.glob("/mars/projects20/evibev_exp/opv2v/cobevt/test*-*"))
+    test_dirs = sorted(glob.glob("/koko/v2vreal-out/cobevt-opv2v/test*-*"))
     for test_dir in test_dirs:
         # if test_dir == "/mars/projects20/evibev_exp/v2vreal/cobevt/test0-1":
         #     continue

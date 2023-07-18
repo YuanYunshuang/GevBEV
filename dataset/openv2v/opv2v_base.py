@@ -75,15 +75,15 @@ class OpV2VBase(BaseDataset):
 
                     lidar_file = osp.join(self.cfgs['path'], self.mode,
                                           scenario_folder, cav_id, timestamp
-                                          + '_semantic_lidarcenter.bin')
+                                          + '.bin')
                     if not osp.exists(lidar_file):
-                        lidar_file = lidar_file.replace('_semantic_lidarcenter.bin', '.pcd')
+                        lidar_file = lidar_file.replace('bin', 'pcd')
                     self.scenario_database[i][cav_id][timestamp]['lidar'] = \
                         lidar_file
 
                     bevmap_file = osp.join(self.cfgs['path'], self.mode,
                                           scenario_folder, cav_id, timestamp
-                                          + '_bev_road.png')
+                                          + '_bev.png')
                     if osp.exists(bevmap_file):
                         self.scenario_database[i][cav_id][timestamp]['bev_map'] = \
                             bevmap_file

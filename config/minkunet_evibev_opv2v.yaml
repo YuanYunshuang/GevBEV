@@ -17,7 +17,7 @@ TRAIN:
 
 DATASET:
   name: OpV2V
-  path: "/koko/OPV2V/additional"
+  path: "/koko/OPV2V/augmented"
   visualize: false
   load_all: false
   max_cav: 2
@@ -42,10 +42,6 @@ DATASET:
   free_space_h: -1.5
   free_space_d: 7.5
   free_space_step: 1.0
-  normalize_features:  # TODO: this is not used, consider removing
-    x: *x
-    y: *y
-    z: *z
 
   augmentation: true
   preprocessors:

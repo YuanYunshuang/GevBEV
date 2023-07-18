@@ -84,7 +84,7 @@ class BaseDataset(Dataset):
             data_dict = self.data[item]
         else:
             data_dict = self.load_one_sample(item)
-        data_dict = self.add_free_space_points(data_dict)
+        # data_dict = self.add_free_space_points(data_dict)
         data_dict = self.map_cls(data_dict)
         data_dict = self.sample_bev_pts(data_dict)
         if self.mode == 'train' and self.cfgs['augmentation']:
