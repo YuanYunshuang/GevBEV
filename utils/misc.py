@@ -39,19 +39,6 @@ def load_from_pl_state_dict(model, pl_state_dict):
     return model
 
 
-# def ensure_torch_cuda(tensor, device=None):
-#     if device is None:
-#         device = torch.device('cuda')
-#     if isinstance(tensor, list):
-#         tensor = np.array(tensor)
-#     if isinstance(tensor, np.ndarray):
-#         tensor = torch.from_numpy(tensor).to(device)
-#     elif isinstance(tensor, torch.Tensor):
-#         tensor = tensor.to(device)
-#
-#     return tensor
-
-
 def check_numpy_to_torch(x):
     if isinstance(x, np.ndarray):
         return torch.from_numpy(x).float(), True

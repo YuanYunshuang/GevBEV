@@ -292,12 +292,6 @@ def weighted_mahalanobis_dists(reg_evi, reg_var, dists, var0):
 
 
 def draw_sample_prob(centers, reg, samples, res, distr_r, lr, batch_size, var0):
-    # from utils.vislib import draw_points_boxes_plt
-    # vis_ctrs = centers[centers[:, 0]==0, 1:].cpu().numpy()
-    # vis_sams = samples[samples[:, 0]==0, 1:].cpu().numpy()
-    #
-    # ax = draw_points_boxes_plt(50, vis_ctrs, points_c='det_r', return_ax=True)
-    # draw_points_boxes_plt(50, vis_sams, points_c='b', ax=ax)
     reg_evi = reg[:, :2]
     reg_var = reg[:, 2:].view(-1, 2, 2)
 

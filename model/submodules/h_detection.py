@@ -1,4 +1,3 @@
-import torch
 import torch_scatter
 from model.submodules.utils import *
 from ops.iou3d_nms_utils import nms_gpu, boxes_iou_bev, aligned_boxes_iou3d_gpu, \
@@ -163,21 +162,6 @@ class DetectionS1(nn.Module):
             cur_boxes = cur_boxes[keep]
             cur_scores = cur_scores[keep]
             cur_ious = cur_ious[keep]
-
-            # #####
-            # mask = self.xy[0]==0
-            # vis_boxes = self.anchors[self.xy[1, mask], self.xy[2, mask]].view(-1, 7).cpu().numpy()
-            # # vis_boxes = cur_boxes.detach().cpu().numpy()
-            # from utils.vislib import draw_points_boxes_plt
-            # if b==0:
-            #     draw_points_boxes_plt(
-            #         pc_range=50,
-            #         points=self.centers[1:, self.centers[0]==0].T.cpu().numpy(),
-            #         boxes_pred=vis_boxes,
-            #         boxes_gt=self.gt_boxes
-            #     )
-            #     print('d')
-            # #####
 
             cur_scores_rectified = cur_scores * cur_ious ** 4
             keep = nms_gpu(cur_boxes, cur_scores_rectified,

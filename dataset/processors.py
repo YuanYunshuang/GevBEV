@@ -1,10 +1,8 @@
 import logging, os
-from typing import Tuple, Any
+from typing import Tuple
 
-import torch, torch_scatter
-import torch.nn.functional as F
+import torch
 import numpy as np
-from torch import Tensor
 
 from utils import pclib, box_utils, vislib
 from ops.utils import points_in_boxes_gpu

@@ -1,10 +1,5 @@
-import functools
-import torch, torch_scatter
-import MinkowskiEngine as ME
-from torch import nn
-from model.submodules.utils import minkconv_conv_block, indices2metric, \
-    pad_r, linear_last, fuse_batch_indices, meshgrid, metric2indices, \
-    weighted_mahalanobis_dists
+import torch
+from model.submodules.utils import metric2indices, linear_last
 from model.submodules.bev_base import BEVBase, HBEVBase
 from model.losses.edl import edl_mse_loss
 
@@ -38,28 +33,9 @@ class EviBEV(BEVBase):
         evidence = evidence_map[
             indices[0], indices[1], indices[2]
         ]
-        # import matplotlib.pyplot as plt
-        # img = torch.zeros_like(evidence_map[0, :, :, [0, 1, 1]])
-        # img[:, :, 1:] = evidence_map[0]
-        # m = indices[0] == 0
-        # img[indices[1][m], indices[2][m], 0] = 1
-        # plt.imshow(img.detach().cpu().numpy().transpose(1, 0, 2)[::-1])
-        # plt.show()
-        # plt.close()
-        # m = tgt_pts[:, 0] == 0
-        # pts = tgt_pts[m, 1:].cpu().numpy()
-        # pos = tgt_label[m].cpu().numpy() > 0
-        # plt.plot(pts[:, 0], pts[:, 1], '.')
-        # plt.plot(pts[pos, 0], pts[pos, 1], '.')
-        # plt.show()
-        # plt.close()
         epoch_num = batch_dict.get('epoch', 0)
         loss, loss_dict = edl_mse_loss(self.name[:3], evidence, tgt_label,
                                        epoch_num, 2, self.annealing_step)
-        # we boost var with a small weighted loss to encourage larger vars
-        # if epoch_num > 40:
-        #     loss_boost = torch.exp(-self.out['reg'].relu()).mean()
-        #     loss = loss + loss_boost * 0.01
         return loss, loss_dict
 
 

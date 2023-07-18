@@ -3,29 +3,52 @@
 # exit when any command fails
 set -e
 
-#echo "[INFO] Running on Local: You should manually load modules..."
-#conda init zsh
-#source /home/yuan/anaconda3/etc/profile.d/conda.sh # you may need to modify the conda path.
-#CUDA_Version=11.3
-#export CUDA_HOME=/usr/local/cuda-$CUDA_Version
-#export LD_LIBRARY_PATH=/usr/local/cuda-$CUDA_Version/lib64:/usr/local/cuda-$CUDA_Version/extras/CUPTI/lib64:$LD_LIBRARY_PATH
-#export PATH=/usr/local/cuda-$CUDA_Version/bin:$PATH:
-#export LIBRARY_PATH=/usr/local/cuda-$CUDA_Version/lib64/stubs
-
 # Set color codes
 GREEN='\033[0;32m'
 NC='\033[0m' # No Color
 
-ENVS=$(conda env list | awk '{print $1}' )
+# Set default values for named arguments
+ENV_NAME_DEFAULT="gevbev"
+CONDA_PATH_DEFAULT="~/anaconda3/etc/profile.d/conda.sh" # you may need to modify the conda path.
 
-if [[ $ENVS = *"$1"* ]]; then
-    echo "\e[31m[ERR] \"$1\" already exists. Pass the installation.\e[0m"
+# Parse command line arguments
+while [[ $# -gt 0 ]]; do
+  key="$1"
+
+  case $key in
+    --env_name)
+      ENV_NAME="$2"
+      shift
+      shift
+      ;;
+    --conda_path)
+      CONDA_PATH="$2"
+      shift
+      shift
+      ;;
+    *)
+      shift
+      ;;
+  esac
+done
+
+# Set named arguments to default values if not provided
+ENV_NAME="${ENV_NAME:-$ENV_NAME_DEFAULT}"
+CONDA_PATH="${CONDA_PATH:-$CONDA_PATH_DEFAULT}"
+
+conda init zsh
+source $CONDA_PATH
+
+ENVS=$(conda env list | awk '{print $ENV_NAME}' )
+
+if [[ $ENVS = *"$ENV_NAME"* ]]; then
+    echo -e "\e[31m[ERR] \"$1\" already exists. Pass the installation.\e[0m"
 else
-    echo -e "${GREEN}[INFO] Create conda environment...${NC}"
-    conda create -n $1 python=3.8 -y
-    conda activate $1
-    conda install openblas-devel -c anaconda
-    sudo apt install build-essential python3-dev libopenblas-dev
+    echo -e "${GREEN}[INFO] Create conda environment: $ENV_NAME ...${NC}"
+    conda create -n $ENV_NAME python=3.8 -y
+    conda activate $ENV_NAME
+    conda install openblas-devel -c anaconda -y
+    sudo apt install build-essential python3-dev libopenblas-dev -y
     pip install --upgrade pip
 
     echo -e "${GREEN}[INFO] Installing pytorch essentials...${NC}"

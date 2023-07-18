@@ -63,12 +63,6 @@ class HBEVBase(nn.Module):
             stensor2d = getattr(self, f'convs_{k}')(stensor2d)
             # after coordinate expansion, some coordinates will exceed the maximum detection
             # range, therefore they are removed here.
-
-            # mask = torch.logical_and(
-            #     stensor2d.C[:, 1:] >= getattr(self, f'x_min_{k}'),
-            #     stensor2d.C[:, 1:] <= getattr(self, f'x_max_{k}'),
-            # ).all(dim=-1)
-            # mask = mask.all(dim=-1)
             xylim = getattr(self, f'mink_xylim_{k}')
             mask = (stensor2d.C[:, 1] > xylim[0]) & (stensor2d.C[:, 1] <= xylim[1]) & \
                    (stensor2d.C[:, 2] > xylim[2]) & (stensor2d.C[:, 2] <= xylim[3])
@@ -302,11 +296,6 @@ class BEVBase(nn.Module):
             indices, mask = self.pts_to_masked_indices(tgt_pts)
             tgt_pts = tgt_pts[mask]
             tgt_label = tgt_bev_pts[mask, 3]
-            # sample new tgt with bev-opv2v map
-            # ixy = metric2indices(tgt_pts, 0.2).long().T
-            # gt_bev = batch_dict['bevmap_static'].permute(0, 2, 1).flip(dims=(1,)) # gt has res=0.2
-            # ixy[1:] += int(gt_bev.shape[1] / 2)
-            # tgt_label = gt_bev[ixy[0], ixy[1], ixy[2]].bool().int()
         else:  # object
             tgt_pts, indices = self.sample_tgt_pts(obs_mask, discrete)
             boxes = batch_dict['target_boxes'].clone()
@@ -324,20 +313,6 @@ class BEVBase(nn.Module):
 
         n_sam = 3000 if self.name=='surface' else len(batch_dict['target_boxes']) * 50
         mask = self.downsample_tgt_pts(tgt_label, max_sam=n_sam)
-        #
-        # if self.name == 'object':
-        #     from utils.vislib import draw_points_boxes_plt
-        #     pts = tgt_pts[mask] # [tgt_label[mask]]
-        #     draw_points_boxes_plt(
-        #         pc_range=[-102.4, -38.4, -5, 102.4, 38.4, 3],
-        #         points=pts[pts[:, 0] == 0, 1:].cpu().numpy(),
-        #         boxes_gt=batch_dict['target_boxes'][batch_dict['target_boxes'][:, 0] == 0, 1:]
-        #     )
-        #     import matplotlib.pyplot as plt
-        #     plt.imshow(obs_mask[0].T.cpu().numpy()[::-1])
-        #     plt.show()
-        #     plt.close()
-        #     raise NotImplementedError
         tgt_label = tgt_label > 0
         return tgt_pts[mask], tgt_label[mask], indices[mask].T
 

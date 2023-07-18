@@ -29,8 +29,7 @@ class BEV(BEVBase):
         inds = metric2indices(ctrs, self.res).T
         inds[1] -= self.offset_sz_x
         inds[2] -= self.offset_sz_y
-        # obs_mask = evidence[..., 0].bool()
-        # obs_mask[inds[0], inds[1], inds[2]] = True
+
         evidence[inds[0], inds[1], inds[2]] = reg_evi
         self.out['evidence'] = evidence
         return evidence.softmax(dim=-1)
@@ -39,12 +38,6 @@ class BEV(BEVBase):
         tgt_pts, tgt_label, indices = self.get_tgt(batch_dict, discrete=True)
         self.draw_distribution(self.out['reg'])
         preds_map = self.out['evidence']
-
-        # import matplotlib.pyplot as plt
-        #
-        # plt.imshow(batch_dict["bevmap_static"][0].detach().cpu().numpy())
-        # plt.show()
-        # plt.close()
 
         preds = preds_map[indices[0], indices[1], indices[2]]
         loss = cross_entroy_with_logits(preds, tgt_label, 2, reduction='mean')

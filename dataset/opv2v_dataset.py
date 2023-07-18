@@ -1,15 +1,11 @@
-import logging
-import os, glob, json
 import torch
 import logging
 
-import cv2
 import numpy as np
 from torch.utils.data import Dataset
 from dataset.const import LABEL_COLORS_carla, VALID_CLS_carla
 from dataset.openv2v.opv2v_base import OpV2VBase
 from dataset.openv2v.utils import boxes_to_corners_3d
-from utils.misc import print_exec_time
 
 
 class OpV2VDataset(OpV2VBase):
@@ -34,13 +30,6 @@ class OpV2VDataset(OpV2VBase):
             lidars = np.concatenate([lidars, - np.ones_like(lidars[:, :1])], axis=-1)
 
         tf_matrices = np.stack(data_dict['tf_matrices'], axis=0)
-
-        # import matplotlib.pyplot as plt
-        # C = np.array(list(self.LABEL_COLORS.values())) / 255
-        # colors = C[lidars[:, -1].astype(int)]
-        # plt.scatter(lidars[:, 0], lidars[:, 1], c=colors, s=1)
-        # plt.show()
-        # plt.close()
 
         # get bounding boxes of ego vehicle
         bbx_mask = data_dict['object_bbx_mask'].astype(bool)
@@ -114,13 +103,3 @@ if __name__ == '__main__':
     for batch in dataset:
         print(i)
         i += 1
-        # if i > 5:
-        #     break
-        # img = batch['bevmap_dynamic'][::2, ::2] * 255
-        # cv2.imwrite(
-        #     os.path.join("/mars/projects20/evibev_exp/v2vreal/gt_bev", '_'.join(batch['frame_id']) + '.jpg'),
-        #     img.T
-        # )
-
-    # dataset.add_free_space_points.get_mean_runtime()
-    # dataset.sample_bev_pts.get_mean_runtime()

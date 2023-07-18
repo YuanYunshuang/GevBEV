@@ -1,11 +1,10 @@
-import os, logging
+import os
 from ops.iou3d_nms_utils import boxes_iou3d_gpu, boxes_iou_bev
 from ops.utils import points_in_boxes_gpu
 import torch
 import torch.nn.functional as F
 import matplotlib.pyplot as plt
 import numpy as np
-from sklearn.metrics import precision_recall_curve
 
 
 class Metric:
@@ -337,24 +336,6 @@ class MetricBevbase(Metric):
     def add_aux_data(self, out_dict):
         raise NotImplementedError
 
-    def pr_curve(self, out_filename):
-        """Draw Precision-Recall Curce"""
-        conf = torch.cat(self.aux_res['conf'], dim=0)
-        unc = torch.cat(self.aux_res['unc'], dim=0)
-        gt = torch.cat(self.aux_res['gt'], dim=0)
-
-        lr_precision, lr_recall, _ = precision_recall_curve(gt.cpu().numpy(),
-                                                            conf[:, 1].cpu().numpy())
-
-        fig = plt.figure(figsize=(6, 6))
-        ax = fig.add_subplot()
-        ax.plot(lr_recall, lr_precision, 'k')
-        ax.set_xlim([0, 1])
-        ax.set_ylim([0, 1])
-        plt.savefig(os.path.join(self.filename, out_filename))
-        plt.close()
-        self.plot_data['pr_curve'] = np.stack([lr_precision, lr_recall], axis=1)
-
     def unc_Q(self, out_filename):
         """Draw Uncertainty Quality bar plot : Accuracy vs. Uncertainty"""
         conf = torch.cat(self.aux_res['conf'], dim=0)
@@ -596,17 +577,6 @@ class MetricDynamicIou(MetricBevbase):
         self.aux_res['unc'].append(out_dict['box_bev_unc'][obs_mask])
         self.aux_res['gt'].append(gt_mask[obs_mask])
 
-        # img = torch.zeros_like(out_dict['box_bev_conf'][..., [0, 0, 0]])
-        # pos = torch.argmax(out_dict['box_bev_conf'], dim=-1)
-        # img[..., 0] = out_dict['box_bev_conf'][..., 1]
-        #
-        # img[..., 1] = gt_mask # * (out_dict['box_bev_conf'][..., 1] <= 0.99)
-        # #
-        # plt.imshow(img[0].cpu().numpy())
-        # plt.savefig('/media/hdd/yuan/TMP/tmp.png')
-        # plt.close()
-        # print('d')
-
     def add_box_ious(self, out_dict):
         conf = out_dict['box_bev_conf_p1']
         unc = out_dict['box_bev_unc_p1']
@@ -676,84 +646,6 @@ class MetricDynamicIou(MetricBevbase):
         self.result['iou'].append(iou_oa)
         self.result['jiou_boxwise'].append(torch.stack(jious_boxwise, dim=0))
         self.result['iou_boxwise'].append(torch.stack(ious_boxwise, dim=0))
-
-        # mpred = pred_boxes[:, 0] == 0
-        # malin = aligned_mask[mpred]
-        # vis_pred_boxes = pred_boxes[mpred][malin]
-        # vis_gt_boxes = aligned_gt_boxes[mpred][malin]
-        # nbox = len(vis_pred_boxes)
-        # if nbox<4:
-        #     return
-        # cols = 3
-        # rows = int(np.ceil(nbox / cols))
-        # fig = plt.figure(figsize=(7, rows * 1.4 + 1))
-        # axes = fig.subplots(rows, cols)
-        #
-        # vis_cfs = pred_box_conf[mpred][malin]
-        # sort_idx = torch.argsort(vis_cfs, descending=True)
-        # vis_cfs = vis_cfs[sort_idx]
-        # vis_ious = aligned_ious[mpred][malin][sort_idx]
-        # vis_gt_boxes = vis_gt_boxes[sort_idx]
-        # vis_pred_boxes = vis_pred_boxes[sort_idx]
-        # vis_pred_sam = pred_box_sam[mpred][malin][sort_idx]
-        # vis_gt_sam = aligned_gt_sam[mpred][malin][sort_idx]
-        # vis_pred_conf = out_dict['pred_box_conf'][mpred][malin][sort_idx]
-        # vis_gt_conf = aligned_gt_box_conf[mpred][malin][sort_idx]
-        # from utils.vislib import draw_box_plt
-        # import matplotlib as mpl
-        # cmap = mpl.cm.get_cmap('RdYlGn')
-        # norm = mpl.colors.Normalize(vmin=0, vmax=1)
-        # for i in range(cols * rows):
-        #     ax = axes[i // cols, i % cols]
-        #     if i >= nbox:
-        #         ax.axis('off')
-        #         continue
-        #     # iou = vis_ious[i]
-        #     jiou, iou = self.jiou(conf, vis_pred_boxes[i:i + 1],
-        #                           vis_gt_boxes[i:i + 1], stride)
-        #     cf = vis_cfs[i].item()
-        #     rgba = cmap(cf)
-        #     # ax.set_title(
-        #     #     f'{u:.2f}:[{jiou.item():.2f},{iou.item():.2f}]',
-        #     #     fontsize=10
-        #     # )
-        #     ax.text(0.01, -0.1,
-        #             f'{cf:.2f}',
-        #             fontsize=12,
-        #             linespacing=0.8,
-        #             backgroundcolor=rgba,
-        #             # bbox=dict(facecolor=[1, u.item(), u.item()]),
-        #             transform=ax.transAxes)
-        #     ax.text(0.3, -0.1,
-        #             f':[{jiou.item():.2f},{iou.item():.2f}]',
-        #             fontsize=12,
-        #             linespacing=0.8,
-        #             transform=ax.transAxes)
-        #     ax.axis('equal')
-        #     ax.axis('off')
-        #     sam = vis_pred_sam[i].cpu().numpy()
-        #     cur_conf = vis_pred_conf[i].cpu().numpy()
-        #     ax.scatter(sam[..., 0], sam[..., 1], c=cur_conf[..., 1], cmap='jet',
-        #                s=10, vmin=0, vmax=1)
-        #     ax = draw_box_plt(
-        #         vis_pred_boxes[i:i + 1, 1:], ax, color='k', linewidth_scale=2.0, linestyle='dashed'
-        #     )
-        #     sam = vis_gt_sam[i].cpu().numpy()
-        #     cur_conf = vis_gt_conf[i].cpu().numpy()
-        #     ax.scatter(sam[..., 0], sam[..., 1], c=cur_conf[..., 1], cmap='jet',
-        #                s=10, vmin=0, vmax=1)
-        #     ax = draw_box_plt(
-        #         vis_gt_boxes[i:i + 1, 1:], ax, color='k', linewidth_scale=2.0
-        #     )
-        # plt.subplots_adjust(bottom=1 / (rows * 1.4 + 1))
-        # cax = plt.axes([0.2, 0.01, 0.6, 0.03])
-        # cbar = plt.colorbar(mpl.cm.ScalarMappable(norm=norm, cmap=cmap),
-        #      cax=cax, orientation='horizontal', label='Evidence scale')
-        # plt.savefig(os.path.join(self.filename, 'img',
-        #                          '_'.join(out_dict['frame_id'][0]) + '_3.png'),
-        #                          bbox_inches='tight')
-        # plt.close()
-        # # print('d')
 
     def get_box_diag_unc_from_sam_unc(self, box_sam_unc, shrink=4):
         """
@@ -830,10 +722,6 @@ class MetricDynamicIou(MetricBevbase):
         )
         gt_mask = box_idx_of_pts >= 0
 
-        # plt.imshow(pred_mask[0].cpu().numpy())
-        # plt.show()
-        # plt.close()
-
         mi = torch.logical_and(pred_mask, gt_mask)
         mu = torch.logical_or(pred_mask, gt_mask)
 
@@ -848,22 +736,6 @@ class MetricDynamicIou(MetricBevbase):
 
     def summary_hook(self):
         pass
-
-        # jiou_oa = torch.stack(self.result['jiou'], dim=0).mean() * 100
-        # iou_oa = torch.stack(self.result['iou'], dim=0).mean() * 100
-        #
-        # jious_boxwise = torch.stack(self.result['jiou_boxwise'], dim=0)
-        # jious_boxwise = (jious_boxwise.sum(dim=0) / jious_boxwise.bool().sum(dim=0)) * 100
-        # ious_boxwise= torch.stack(self.result['iou_boxwise'], dim=0)
-        # ious_boxwise = (ious_boxwise.sum(dim=0) / ious_boxwise.bool().sum(dim=0)) * 100
-        #
-        # self.result_dict.update({
-        #     'jiou_boxwise': jious_boxwise,
-        #     'iou boxewise': ious_boxwise,
-        #     'jiou overall': jiou_oa.item(),
-        #     'iou overall': iou_oa.item()
-        # })
-
 
 
 

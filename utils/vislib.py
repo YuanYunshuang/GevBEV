@@ -17,80 +17,6 @@ def log_loss(batch_data):
     wandb.log(loss_dict)
 
 
-def plot_keypoints(batch_data):
-    assert 'keypoints' in batch_data
-    assert 'translations' in batch_data
-    points_np = batch_data['keypoints']
-    cav_locs_np = batch_data['translations']
-    if isinstance(points_np, torch.Tensor):
-        points_np = points_np.detach().cpu().numpy()
-        cav_locs_np = cav_locs_np.detach().cpu().numpy()
-
-    if isinstance(points_np, list):
-        points_list = points_np
-    else:
-        points_list = [points_np[points_np[:, 0].astype(int) == i, 1:]
-                       for i in range(points_np[:, 0].astype(int).max() + 1)]
-    assert len(points_list)==cav_locs_np.shape[0]
-
-    fig = plt.figure(figsize=(8, 8))
-    ax = fig.add_subplot()
-    for points, loc in zip(points_list, cav_locs_np):
-        points_global2d = points[:, :2] + loc.reshape(1, 2)
-        ax.plot(points_global2d[:, 0], points_global2d[:, 1], '.', markersize=1)
-    if use_wandb:
-        image = wandb.Image(plt, caption="Input keypoints")
-        wandb.log({"images": image})
-    else:
-        plt.savefig("/media/hdd/yuan/TMP/tmp.png")
-
-
-def plot_keypoints_match(batch_dict):
-    tf = batch_dict['translations'].detach().cpu().numpy()
-    errs = batch_dict['loc_errs'].detach().cpu().numpy()
-    kpts = batch_dict['cpm_coords'].detach().cpu().numpy()
-    kpts_ego = kpts[kpts[:, 0]==0, 1:3] + tf[0:1, :] + errs[0:1, :2]
-    kpts_coop = kpts[kpts[:, 0]==1, 1:3] + tf[1:2, :] + errs[1:2, :2]
-    pred_cls = batch_dict['keypoints_match'][2, 0, :len(kpts_coop)].detach()
-    tgt_cls = batch_dict['tgt_cls'][0, :len(kpts_coop)].detach()
-
-    match_pred = pred_cls.argmax(dim=-1).cpu().numpy()
-    valid_indices_pred = match_pred[match_pred < len(kpts_ego)]
-    match_gt = tgt_cls.argmax(dim=-1).cpu().numpy()
-    valid_indices_gt = match_gt[match_gt < len(kpts_ego)]
-
-    def draw_connections(p1, p2, ax, color):
-        ax.plot([p1[0], p2[0]], [p1[1], p2[1]], color=color, linewidth=.5)
-
-    fig = plt.figure(figsize=(17, 8))
-    ax = fig.add_subplot(121)
-    # plot keypoints
-    ax.plot(kpts_ego[:, 0], kpts_ego[:, 1], '.g', markersize=5)
-    ax.plot(kpts_coop[:, 0], kpts_coop[:, 1], '.det_r', markersize=5)
-    # plot matches
-    mask = match_pred < len(kpts_ego)
-
-    if mask.sum() > 0:
-        for p1, p2 in zip(kpts_coop[mask], kpts_ego[valid_indices_pred]):
-            draw_connections(p1, p2, ax, color='k')
-
-    ax = fig.add_subplot(122)
-    # plot keypoints
-    ax.plot(kpts_ego[:, 0], kpts_ego[:, 1], '.g', markersize=5)
-    ax.plot(kpts_coop[:, 0], kpts_coop[:, 1], '.det_r', markersize=5)
-    # plot matches
-    mask = match_gt < len(kpts_ego)
-    for p1, p2 in zip(kpts_coop[mask], kpts_ego[valid_indices_gt]):
-        draw_connections(p1, p2, ax, color='k')
-
-    if use_wandb:
-        image = wandb.Image(plt, caption="Input keypoints")
-        wandb.log({"images": image})
-    else:
-        plt.savefig("/media/hdd/yuan/TMP/tmp.png")
-    plt.close()
-
-
 def draw_box_plt(boxes_dec, ax, color=None, linewidth_scale=1.0, linestyle='solid'):
     """
     draw boxes in a given plt ax
@@ -167,11 +93,3 @@ def draw_points_boxes_plt(pc_range=None, points=None, boxes_pred=None, boxes_gt=
         wandb.log({wandb_name: wandb.Image(plt)})
     if return_ax:
         return ax
-    # plt.show()
-    plt.savefig('./tmp/tmp.png')
-    plt.close()
-
-
-def draw_img(img):
-    plt.imshow(img)
-    plt.savefig("./tmp/img.png")

@@ -1,9 +1,9 @@
-import logging, tqdm
+import tqdm
+import logging
 
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
-import logging
 import torch.nn.functional as F
 from scipy.spatial.transform.rotation import Rotation as R
 
@@ -13,7 +13,6 @@ from dataset.data_utils import project_points_by_matrix
 from utils.pclib import rotate_points_along_z
 from utils.box_utils import limit_period
 from utils.vislib import draw_points_boxes_plt, draw_img
-from utils.misc import print_exec_time
 from ops.utils import points_in_boxes_cpu
 
 

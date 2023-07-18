@@ -1,20 +1,11 @@
-import functools
 import torch, torch_scatter
-import MinkowskiEngine as ME
-from torch import nn
 from model.submodules.utils import draw_sample_prob, \
-    pad_r, linear_last, indices2metric, meshgrid, metric2indices, \
+    linear_last, meshgrid, metric2indices, \
     weighted_mahalanobis_dists
 from model.submodules.bev_base import BEVBase, HBEVBase
 from model.losses.edl import edl_mse_loss
-import matplotlib.pyplot as plt
-from PIL import Image
-import numpy as np
 import matplotlib.cm as cm
-from utils.vislib import draw_points_boxes_plt
 cm_hot = cm.get_cmap('hot')
-from PIL import Image
-
 
 class EviGausBEV(BEVBase):
     def __init__(self, cfgs):
@@ -43,13 +34,6 @@ class EviGausBEV(BEVBase):
             Nall, Nsel = None, None
         else:
             unc, conf = self.evidence_to_conf_unc(evidence)
-            # if self.name == "surface":
-            #     unc, conf = self.evidence_to_conf_unc(evidence)
-            #     batch_dict['cpm_unc'] = unc
-            # else:
-            #     # use uncertainty for cpm selection
-            #     unc = batch_dict['cpm_unc']
-            #     _, conf = self.evidence_to_conf_unc(evidence)
             if getattr(self, 'cpm_option', 'none') == 'road':
                 assert batch_dict['bevmap_static'] is not None, 'gt road bev-opv2v is not available.'
                 sx, sy = batch_dict['bevmap_static'].shape[1:3]
@@ -63,7 +47,7 @@ class EviGausBEV(BEVBase):
                 raise NotImplementedError
 
             evidence_cpm, Nall, Nsel = self.get_cpm_evimap(
-                batch_dict['num_cav'], unc, conf, evidence, cared_mask, batch_dict
+                batch_dict['num_cav'], unc, evidence, cared_mask, batch_dict
             )
 
             ego_idx = [sum(batch_dict['num_cav'][:i]) for i in range(len(batch_dict['num_cav']))]
@@ -102,7 +86,7 @@ class EviGausBEV(BEVBase):
         obs_mask = obs_mask.view(batch_size, self.size_x, self.size_y).bool()
         return evidence, obs_mask
 
-    def get_cpm_evimap(self, num_cav, unc, conf, evidence, cared_mask, batch_dict=None):
+    def get_cpm_evimap(self, num_cav, unc, evidence, cared_mask, batch_dict=None):
         """
         1. Count pixels of sharing all observed and masked (i.e road) areas
         2. Count pixels of sharing selected area which is filter by a given unc. threshold
@@ -118,58 +102,15 @@ class EviGausBEV(BEVBase):
             # get unc. and evidence map for the current batch
             idx_start = sum(num_cav[:i])
             cur_unc = unc[idx_start:idx_start + c]
-            cur_conf = conf[idx_start:idx_start + c]
             cur_evi = evidence[idx_start:idx_start + c]
-
-            # if batch_dict is not None:
-            #     ego_mask = batch_dict['in_data'].C[:, 0] == idx_start
-            #     coop_mask = batch_dict['in_data'].C[:, 0] == idx_start + 1
-            #     ego_pts = batch_dict['xyz'][ego_mask].cpu().numpy()
-            #     coop_pts = batch_dict['xyz'][coop_mask].cpu().numpy()
-            #     ax = draw_points_boxes_plt(pc_range=self.lidar_range,
-            #                                points=ego_pts,
-            #                                points_c='r',
-            #                                return_ax=True)
-            #     draw_points_boxes_plt(pc_range=self.lidar_range,
-            #                           points=coop_pts,
-            #                           points_c='g',
-            #                           ax=ax)
-
-            # img = cm_hot(1 - cur_unc[0].cpu().numpy())[..., :3] * 255
-            # Image.fromarray(img.astype(np.uint8)).save(
-            #     '/media/hdd/yuan/evibev_exp/unc0.png'
-            # )
-            # img = cm_hot(1 - cur_unc[1].cpu().numpy())[..., :3] * 255
-            # Image.fromarray(img.astype(np.uint8)).save(
-            #     '/media/hdd/yuan/evibev_exp/unc1.png'
-            # )
-            # plt.imshow(1 - cur_unc[0].cpu().numpy(), cmap='hot')
-            # plt.savefig('/media/hdd/yuan/evibev_exp/unc0.png')
-            # plt.close()
-            # plt.imshow(1 - cur_unc[1].cpu().numpy(), cmap='hot')
-            # plt.savefig('/media/hdd/yuan/evibev_exp/unc1.png')
-            # plt.close()
 
             # share all info on masked area
             resp_all = torch.logical_and(cur_unc[1:] < 1.0, cared_mask[i].unsqueeze(0))
             n_share_all = n_share_all + resp_all.sum().item()
-            # ego mask for requesting the CPM from coop. CAV
             req_mask = torch.logical_and(cur_unc[0] >= self.cpm_thr, cared_mask[i])
 
             # coop mask for responding
             rsp_mask = torch.logical_and(cur_unc[1:] < 1.0, req_mask.unsqueeze(0))
-            # rsp_mask = torch.logical_and(cur_conf[1:, :, :, 1] > 0., req_mask.unsqueeze(0))
-
-            # img = torch.zeros_like(rsp_mask[[0, 0, 0]])
-            # img[0] = req_mask
-            # Image.fromarray((img.permute(1, 2, 0).int() * 255).cpu().numpy().astype(np.uint8)).save(
-            #     '/media/hdd/yuan/evibev_exp/req.png'
-            # )
-            # img = torch.zeros_like(rsp_mask[[0, 0, 0]])
-            # img[1] = rsp_mask[0]
-            # Image.fromarray((img.permute(1, 2, 0).int() * 255).cpu().numpy().astype(np.uint8)).save(
-            #     '/media/hdd/yuan/evibev_exp/rsp.png'
-            # )
 
             # share selected
             n_share_selected = n_share_selected + rsp_mask.sum().item()
@@ -234,16 +175,6 @@ class EviGausBEV(BEVBase):
     def loss(self, batch_dict):
         tgt_pts, tgt_labels, indices = self.get_tgt(batch_dict)
 
-        # import matplotlib.pyplot as plt
-        # pts = self.centers[:, 1:3].cpu().numpy().T
-        # plt.plot(pts[0], pts[1], '.b')
-        # pts = tgt_pts[:, 1:3].cpu().numpy().T
-        # plt.plot(pts[0], pts[1], '.r')
-        # pts = tgt_pts[tgt_labels, 1:3].cpu().numpy().T
-        # plt.plot(pts[0], pts[1], '.g')
-        # plt.show()
-        # plt.close()
-
         evidence = draw_sample_prob(self.centers[:, :3],
                                     self.out['reg'].relu(),
                                     tgt_pts,
@@ -255,10 +186,6 @@ class EviGausBEV(BEVBase):
         epoch_num = batch_dict.get('epoch', 0)
         loss, loss_dict = edl_mse_loss(self.name[:3], evidence, tgt_labels,
                                        epoch_num, 2, self.annealing_step)
-        # we boost var with a small weighted loss to encourage larger vars
-        # if epoch_num > 40:
-        #     loss_boost = torch.exp(-self.out['reg'].relu()).mean()
-        #     loss = loss + loss_boost * 0.01
         return loss, loss_dict
 
 

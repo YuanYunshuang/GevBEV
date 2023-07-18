@@ -132,6 +132,14 @@ args:
 - ```log_dir```: (optional) log path for the training output folder.
 - ```save_img```: (optional) output visulization images if set.
 
+### Benchmark models
+Your can find the code and the checkpoints of the trained model under the repo [v2v4real-bevseg](https://github.com/YuanYunshuang/v2v4real-bevseg).
+In this repo, you can generate bev segmentation result with the following command. Please check the repo for more details.
+```shell
+# in the root path of v2v4real-bevseg
+python opencood/tools/inference.py --model_dir ${CHECKPOINT_FOLDER} --fusion_method ${FUSION_STRATEGY} [--show_vis] [--show_sequence] [--save_evibev]
+```
+
 ## Results and Checkpoints
 
 | Method    | OPV2V-road | OPV2V-object | V2V4Real-object | OPV2V ckpt                                                                                                                            | V2V4Real ckpt |
