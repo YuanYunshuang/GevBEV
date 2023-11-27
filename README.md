@@ -151,13 +151,16 @@ python opencood/tools/inference.py --model_dir ${CHECKPOINT_FOLDER} --fusion_met
 
 ## Citation
 ```
-@misc{yuan2023gevbev,
-      title={Generating Evidential BEV Maps in Continuous Driving Space}, 
-      author={Yunshuang Yuan and Hao Cheng and Michael Ying Yang and Monika Sester},
-      year={2023},
-      eprint={2302.02928},
-      archivePrefix={arXiv},
-      primaryClass={cs.CV}
+@article{Yuan_gevbev2023,
+  title={Generating Evidential BEV Maps in Continuous Driving Space},
+  author={Yunshuang Yuan and Hao Cheng and Michael Ying Yang and Monika Sester},
+  journal={ISPRS Journal of Photogrammetry and Remote Sensing},
+  volume = {204},
+  pages = {27-41},
+  year = {2023},
+  issn = {0924-2716},
+  doi = {https://doi.org/10.1016/j.isprsjprs.2023.08.013},
+  url = {https://www.sciencedirect.com/science/article/pii/S0924271623002290},
 }
 ```
 
