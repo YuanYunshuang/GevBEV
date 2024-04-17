@@ -12,7 +12,7 @@ from torch.utils.data import Dataset
 from dataset.data_utils import project_points_by_matrix
 from utils.pclib import rotate_points_along_z
 from utils.box_utils import limit_period
-from utils.vislib import draw_points_boxes_plt, draw_img
+from utils.vislib import draw_points_boxes_plt
 from ops.utils import points_in_boxes_cpu
 
 
@@ -83,7 +83,7 @@ class BaseDataset(Dataset):
             data_dict = self.data[item]
         else:
             data_dict = self.load_one_sample(item)
-        # data_dict = self.add_free_space_points(data_dict)
+        data_dict = self.add_free_space_points(data_dict)
         data_dict = self.map_cls(data_dict)
         data_dict = self.sample_bev_pts(data_dict)
         if self.mode == 'train' and self.cfgs['augmentation']:
@@ -485,7 +485,7 @@ class BaseDataset(Dataset):
         draw_points_boxes_plt(lr, boxes_gt=boxes, ax=ax)
 
         # draw bev-opv2v maps
-        draw_img(data_dict['bevmap_dynamic'])
+        # draw_img(data_dict['bevmap_dynamic'])
 
     def post_process(self, batch_dict):
         out_dict = {}

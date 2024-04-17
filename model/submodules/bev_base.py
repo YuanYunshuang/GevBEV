@@ -181,8 +181,30 @@ class BEVBase(nn.Module):
             'reg': reg,
         }
 
+        # import matplotlib.pyplot as plt
+        # fig = plt.figure(figsize=(10, 10))
+        # mask = self.centers[:, 0] == 0
+        # ctr = self.centers[mask, 1:].detach().cpu().numpy()
+        #
+        # alpha = reg[mask, :2].relu() + 1
+        # S = torch.sum(alpha, dim=-1, keepdim=True)
+        # conf = torch.div(alpha, S)
+        # colors = conf[:, 1].detach().cpu().numpy()
+        # plt.scatter(ctr[:, 0], ctr[:, 1], cmap='jet', c=colors, edgecolors=None, marker='.', s=2, vmin=0, vmax=1)
+        # plt.show()
+        # plt.close()
+
         if not self.training:
             evidence = self.draw_distribution(batch_dict)
+
+            # visualization
+            # alpha = evidence + 1
+            # S = torch.sum(alpha, dim=-1, keepdim=True)
+            # conf = torch.div(alpha, S)
+            # plt.imshow(conf[0, :, :, 1].detach().cpu().numpy())
+            # plt.show()
+            # plt.close()
+
             batch_dict[f'distr_{self.name}'] = {
                 'evidence': evidence,
                 'obs_mask': conv_out['obs_mask'],
