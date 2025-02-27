@@ -25,6 +25,11 @@ cat test.part.* > test.zip
 unzip train.zip
 unzip test.zip
 ```
+You can also download it with the script
+```shell
+bash download.sh OPV2Va OUTPUT_DIR
+```
+
 The unzipped files should have the following structure:
 ```shell
 ├── opv2v
